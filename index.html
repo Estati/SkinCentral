@@ -86,6 +86,14 @@ input[type=file]{width:100%;font:inherit;font-size:var(--t);color:#cfc8bf;backgr
 .card.admin{align-items:stretch;text-align:left;margin-bottom:16px}
 .card.admin h3{margin:0 0 8px}
 .card.admin input[type=text]{margin:8px 0}
+.picon{width:16px;height:16px;image-rendering:pixelated;vertical-align:middle;margin-right:8px}
+@media (min-width:700px){.picon{width:32px;height:32px}}
+.plats{display:flex;gap:8px;flex-wrap:wrap;justify-content:center}
+.plats .picon{margin:0}
+#refresh{margin-bottom:16px}
+.reportbox{margin-top:32px}
+.reportbox form,.reportbox div{margin-top:12px}
+.reportbox .btn{margin-top:8px}
 footer{margin-top:8px;font-size:var(--t);color:#cfc8bf;text-shadow:2px 2px 0 #000}
 @media (prefers-reduced-motion:reduce){.splash{animation:none}}
 </style>
@@ -105,6 +113,7 @@ footer{margin-top:8px;font-size:var(--t);color:#cfc8bf;text-shadow:2px 2px 0 #00
 
   <section class="panel" id="skins">
     <h2>Downloads</h2>
+    <button class="btn" id="refresh" type="button">Refresh</button>
     <input type="search" id="q" placeholder="Search packs or platforms" aria-label="Search packs">
     <div class="grid" id="grid"></div>
   </section>
@@ -173,6 +182,48 @@ function icon(p,cls){
   px(0,0,8,8,'#2a1b0e');px(1,1,6,6,'#8a5a2b');px(1,1,6,1,'#a97439');px(1,3,6,1,'#5c3a18');px(3,3,2,2,'#ffd84a');
   return c;
 }
+/* PLATFORM ICONS: draw a small PNG per platform (16x16 pixel art looks best), put them in
+   images/platforms/, then remove the // in front of the lines you have. The names on the left
+   must match the platform names on the buttons exactly. */
+const PLATFORM_ICONS={
+  // 'Xbox 360':'images/platforms/xbox360.png',
+  // 'PS3':'images/platforms/ps3.png',
+  // 'Wii U':'images/platforms/wiiu.png',
+  // 'PS Vita':'images/platforms/vita.png',
+  // 'PS4':'images/platforms/ps4.png',
+  // 'Xbox One':'images/platforms/xboxone.png',
+  // 'Switch':'images/platforms/switch.png',
+};
+function pIcon(name){const src=PLATFORM_ICONS[name];return src?el('img',{src,alt:'',class:'picon',title:name}):null}
+
+/* REPORT BUTTON: sends a report about a pack to the moderators (needs a Discord login). */
+function reportBox(p){
+  const box=el('div',{class:'reportbox'});
+  const toggle=el('button',{class:'btn',type:'button',text:'Report this pack'});
+  const form=el('div',{hidden:''});
+  const why=el('textarea',{maxlength:'300',placeholder:'What is wrong? (stolen or ripped content, unsafe file, something else)','aria-label':'Why are you reporting this pack?'});
+  const send=el('button',{class:'btn',type:'button',text:'Send report'});
+  const msg=el('p',{class:'msg',role:'status'});
+  form.append(el('p',{class:'hint',text:'Reports go to the moderators. You need to be logged in with Discord.'}),why,send,msg);
+  box.append(toggle,form);
+  toggle.addEventListener('click',()=>{form.hidden=!form.hidden});
+  send.addEventListener('click',async()=>{
+    msg.className='msg';msg.textContent='';
+    const me=await meP;
+    if(!me.loggedIn){msg.className='msg err';msg.textContent='Log in with Discord first (button at the top of the page).';return}
+    const reason=why.value.trim();
+    if(reason.length<5){msg.className='msg err';msg.textContent='Please say what is wrong (at least 5 characters).';return}
+    send.disabled=true;
+    try{
+      const r=await fetch('/api/report',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({slug:p.slug,name:p.name,reason})});
+      const d=await r.json().catch(()=>({}));
+      if(r.ok&&d.ok){msg.className='msg ok';msg.textContent=d.message;why.value=''}
+      else{msg.className='msg err';msg.textContent=d.error||'Could not send the report.'}
+    }catch{msg.className='msg err';msg.textContent='Network problem. Try again.'}
+    send.disabled=false;
+  });
+  return box;
+}
 let packs=[];
 function renderList(filter){
   const grid=$('grid');grid.textContent='';document.title='Skin Central: Legacy Console Edition';
@@ -182,8 +233,11 @@ function renderList(filter){
   list.forEach(p=>{
     const href='#/pack/'+encodeURIComponent(p.slug);
     const link=el('a',{href,class:'iconlink','aria-label':'Open '+p.name},icon(p));
+    const pl=el('div',{class:'plats'});
+    p.files.forEach(f=>{const i=pIcon(f.platform);if(i)pl.append(i)});
     grid.appendChild(el('div',{class:'card'},link,
       el('a',{href,class:'name',text:p.name}),
+      pl.children.length?pl:null,
       el('small',{text:'by '+p.creator+' for '+p.files.map(x=>x.platform).join(', ')}),
       el('a',{href,class:'btn',text:'View pack'})));
   });
@@ -191,7 +245,11 @@ function renderList(filter){
 function showPack(p){
   const d=$('detail');d.textContent='';document.title=p.name+' | Skin Central';
   const dl=el('div',{class:'dl'});
-  p.files.forEach(f=>dl.appendChild(el('a',{class:'btn',href:f.href,download:'',text:f.platform+(f.size?' ('+f.size+')':'')})));
+  p.files.forEach(f=>{
+    const a=el('a',{class:'btn',href:f.href,download:'',text:f.platform+(f.size?' ('+f.size+')':'')});
+    const pi=pIcon(f.platform);if(pi)a.prepend(pi);
+    dl.appendChild(a);
+  });
   d.append(el('a',{class:'btn',href:'#skins',text:'Back to all packs'}),
     el('div',{class:'head'},icon(p,'big'),el('div',{},
       el('h2',{text:p.name}),el('p',{class:'by',text:'By '+p.creator+', added '+p.date}),el('p',{class:'tags',text:p.tags.join(', ')}))),
@@ -201,6 +259,7 @@ function showPack(p){
     p.images.forEach(src=>g.appendChild(el('img',{src,alt:p.name+' preview',loading:'lazy'})));
     d.append(el('h3',{text:'Screenshots'}),g);
   }
+  d.append(reportBox(p));
 }
 
 /* ---------- UPLOAD FORM ----------
@@ -314,6 +373,18 @@ function adminCard(p,act){
     shots.children.length?shots:null,
     el('h3',{text:'Files'}),files,reason,btns);
 }
+function reportCard(r,act,close){
+  const btns=el('div',{class:'dl'});
+  const mk=(t,fn)=>{const b=el('button',{class:'btn',type:'button',text:t});b.addEventListener('click',fn);btns.append(b)};
+  if(r.packId)mk('Take down pack',()=>act(r.packId,'deny','Removed after a report',()=>close(r.id)));
+  mk('Close report',()=>close(r.id));
+  return el('div',{class:'card admin'},
+    el('h3',{text:'Report: '+r.packName}),
+    el('p',{class:'by',text:'By '+r.reporter+' (Discord ID '+r.reporterId+'), '+r.date}),
+    el('p',{class:'desc',text:r.reason}),
+    r.packId?null:el('p',{class:'hint',text:'This is a built-in pack. To remove it, delete its entry from packs.json.'}),
+    btns);
+}
 function showAdmin(){
   const a=$('admin');a.textContent='';document.title='Moderation | Skin Central';
   a.append(el('a',{class:'btn',href:'#skins',text:'Back to all packs'}),el('h2',{text:'Moderation'}));
@@ -328,29 +399,41 @@ function showAdmin(){
     const msg=el('p',{class:'msg',role:'status'});
     a.append(tabs,msg,list);
     let current='pending';
-    async function act(id,action,reason){
+    async function act(id,action,reason,after){
       msg.className='msg';msg.textContent='Working...';
       try{
         const r=await fetch('/api/admin/review',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({id,action,reason})});
         const d=await r.json().catch(()=>({}));
-        if(r.ok&&d.ok){msg.className='msg ok';msg.textContent='Done: '+d.status+'.';load(current)}
+        if(r.ok&&d.ok){msg.className='msg ok';msg.textContent='Done: '+d.status+'.';after?after():load(current)}
+        else{msg.className='msg err';msg.textContent=d.error||'That did not work.'}
+      }catch{msg.className='msg err';msg.textContent='Network problem. Try again.'}
+    }
+    async function closeReport(id){
+      msg.className='msg';msg.textContent='Working...';
+      try{
+        const r=await fetch('/api/admin/report-close',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({id})});
+        const d=await r.json().catch(()=>({}));
+        if(r.ok&&d.ok){msg.className='msg ok';msg.textContent='Report closed.';load(current)}
         else{msg.className='msg err';msg.textContent=d.error||'That did not work.'}
       }catch{msg.className='msg err';msg.textContent='Network problem. Try again.'}
     }
     async function load(st){
       current=st;list.textContent='Loading...';
       let items;
-      try{const r=await fetch('/api/admin/list?status='+st);items=await r.json();if(!r.ok)throw 0}
+      try{const r=await fetch(st==='reports'?'/api/admin/reports':'/api/admin/list?status='+st,{cache:'no-store'});items=await r.json();if(!r.ok)throw 0}
       catch{list.textContent='Could not load packs.';return}
       list.textContent='';
       if(!items.length){list.appendChild(el('p',{class:'empty',text:'Nothing here.'}));return}
-      items.forEach(p=>list.appendChild(adminCard(p,act)));
+      items.forEach(p=>list.appendChild(st==='reports'?reportCard(p,act,closeReport):adminCard(p,act)));
     }
-    ['pending','approved','denied'].forEach(st=>{
+    ['pending','approved','denied','reports'].forEach(st=>{
       const b=el('button',{class:'btn',type:'button',text:st[0].toUpperCase()+st.slice(1)});
       b.addEventListener('click',()=>{msg.textContent='';load(st)});
       tabs.append(b);
     });
+    const rb=el('button',{class:'btn',type:'button',text:'Refresh'});
+    rb.addEventListener('click',()=>{msg.textContent='';load(current)});
+    tabs.append(rb);
     load('pending');
   });
 }
@@ -366,11 +449,21 @@ function route(){
 }
 $('q').addEventListener('input',e=>renderList(e.target.value));
 window.addEventListener('hashchange',route);
-Promise.all([
-  fetch('packs.json').then(r=>r.json()),
-  fetch('/api/packs').then(r=>r.ok?r.json():[]).catch(()=>[])
-]).then(([a,b])=>{packs=a.concat(b);route()})
-  .catch(()=>{$('grid').textContent="Couldn't load the pack list. If you opened this file directly, try the live site instead."});
+function loadPacks(quiet){
+  return Promise.all([
+    fetch('packs.json',{cache:'no-cache'}).then(r=>r.json()),
+    fetch('/api/packs',{cache:'no-store'}).then(r=>r.ok?r.json():[]).catch(()=>[])
+  ]).then(([a,b])=>{
+    packs=a.concat(b);
+    // On a plain refresh of the gallery, keep the scroll position instead of jumping to the top.
+    if(quiet&&(location.hash===''||location.hash==='#skins'))renderList($('q').value);else route();
+  }).catch(()=>{$('grid').textContent="Couldn't load the pack list. If you opened this file directly, try the live site instead."});
+}
+loadPacks();
+$('refresh').addEventListener('click',()=>{
+  const b=$('refresh');b.textContent='Refreshing...';
+  loadPacks(true).then(()=>{b.textContent='Refreshed!';setTimeout(()=>{b.textContent='Refresh'},1500)});
+});
 
 /* ---------- DISCORD LOGIN ----------
    Asks the Worker who is logged in. If someone is, the button becomes a log out button. */
