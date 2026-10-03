@@ -24,6 +24,204 @@
 html{cursor:url("images/cursor.cur"),url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='24' height='38' viewBox='0 0 12 19' shape-rendering='crispEdges'%3E%3Cpolygon points='0,0 0,16 4,12 7,19 10,18 7,11 12,11' fill='white' stroke='black' stroke-width='1'/%3E%3C/svg%3E") 1 1, auto}
 a,button,input,.btn{cursor:url("images/cursor.cur"),url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='24' height='38' viewBox='0 0 12 19' shape-rendering='crispEdges'%3E%3Cpolygon points='0,0 0,16 4,12 7,19 10,18 7,11 12,11' fill='%23ffff55' stroke='black' stroke-width='1'/%3E%3C/svg%3E") 1 1, pointer}
 
+/* BACKGROUND: the dirt tile now lives in images/dirt.png instead of being embedded in this file. */
 body{margin:0;min-height:100vh;color:var(--ink);font-family:'Mojang','VT323',monospace;font-size:var(--b);line-height:1.25;word-spacing:.25em;
   -webkit-font-smoothing:none;font-smooth:never;image-rendering:pixelated;
-  background:#5a3d26 url("data:image/png;base64,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
+  background:#5a3d26 url("images/dirt.png") 0 0/var(--tile) var(--tile)}
+body::before{content:"";position:fixed;inset:0;background:rgba(0,0,0,.35);z-index:-1}
+.wrap{max-width:980px;margin:0 auto;padding:var(--pad) var(--pad) 48px}
+
+h1{margin:16px 0 52px;position:relative;display:block;max-width:720px}
+.logo{display:block;width:100%;height:auto;image-rendering:pixelated}
+.splash{position:absolute;right:0;bottom:-28px;font-size:var(--t);color:var(--gold);
+  text-shadow:2px 2px 0 #3f3f00;transform:rotate(-8deg);animation:pulse 1s ease-in-out infinite alternate;white-space:nowrap}
+@keyframes pulse{to{transform:rotate(-8deg) scale(1.1)}}
+.sub{font-size:var(--b);margin:0 0 20px;color:#e6e6e6;text-shadow:var(--sh) var(--sh) 0 #3b3b3b}
+
+.row{display:flex;flex-wrap:wrap;gap:12px;margin-bottom:24px}
+.row .btn{flex:1 1 150px}
+.btn{font-family:inherit;font-size:var(--b);line-height:1.25;color:#fff;text-decoration:none;text-shadow:var(--sh) var(--sh) 0 #3f3f3f;
+  background:var(--btn);padding:8px 16px;border:4px solid;border-color:var(--btn-hi) var(--btn-lo) var(--btn-lo) var(--btn-hi);
+  outline:3px solid #000;text-align:center;overflow-wrap:anywhere}
+.btn:hover,.btn:focus-visible{color:var(--gold);outline-color:#fff;background:#7c86b8}
+.btn:active{border-color:var(--btn-lo) var(--btn-hi) var(--btn-hi) var(--btn-lo)}
+
+.panel{background:var(--panel);border:4px solid;border-color:#5b5149 #14110f #14110f #5b5149;outline:3px solid #000;padding:var(--pad);margin-bottom:24px}
+.panel h2{font-weight:700;font-size:var(--h);margin:0 0 16px;text-shadow:var(--sh) var(--sh) 0 #000}
+input[type=search]{width:100%;font:inherit;font-size:var(--b);color:#fff;background:#000;padding:8px 12px;border:3px solid #6d6d6d;margin-bottom:20px}
+input[type=search]:focus{outline:3px solid var(--gold)}
+
+.grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(150px,1fr));gap:12px}
+@media (min-width:700px){.grid{grid-template-columns:repeat(auto-fill,minmax(200px,1fr));gap:16px}}
+.card{background:#3a332d;border:3px solid #14110f;padding:12px;display:flex;flex-direction:column;gap:8px;align-items:center;text-align:center;min-width:0}
+.card:hover{border-color:#fff}
+.card small{font-size:var(--t);color:#bdb5ac;overflow-wrap:anywhere}
+.card .btn{font-size:var(--t);padding:6px 12px;width:100%;margin-top:4px}
+.card .name{font-weight:700;font-size:var(--b);color:#fff;text-decoration:none;overflow-wrap:anywhere}
+.card .name:hover{color:var(--gold)}
+.empty{grid-column:1/-1;color:#bdb5ac}
+
+.icon{display:block;width:var(--icon);height:var(--icon);image-rendering:pixelated;background:#222;border:3px solid #000}
+.icon.big{width:var(--icon-big);height:var(--icon-big)}
+.iconlink:hover .icon,.iconlink:focus-visible .icon{border-color:var(--gold)}
+.head{display:flex;gap:16px;align-items:center;flex-wrap:wrap;margin:20px 0}
+.head h2{margin:0 0 8px}
+.by,.tags{margin:0 0 8px;font-size:var(--t);color:#bdb5ac}
+.desc{max-width:60ch;margin:0 0 8px}
+#detail h3{font-size:var(--b);margin:20px 0 12px}
+.dl{display:flex;flex-wrap:wrap;gap:12px}
+.shots{display:grid;grid-template-columns:repeat(auto-fill,minmax(200px,1fr));gap:12px}
+.shots img{width:100%;image-rendering:pixelated;border:3px solid #000}
+footer{margin-top:8px;font-size:var(--t);color:#cfc8bf;text-shadow:2px 2px 0 #000}
+@media (prefers-reduced-motion:reduce){.splash{animation:none}}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1><img class="logo" src="images/logo.png" alt="Skin Central" width="1290" height="168"><span class="splash">Now with sound!</span></h1>
+  <p class="sub">Legacy Console Edition skins, one click away.</p>
+
+  <div class="row">
+    <a class="btn" href="#skins">Browse packs</a>
+    <a class="btn" href="https://discord.gg/atQA5ecyxj">Join the Discord</a>
+    <a class="btn" id="login" href="/auth/login">Log in with Discord</a>
+    <button class="btn" id="mute" type="button">Sound: On</button>
+  </div>
+
+  <section class="panel" id="skins">
+    <h2>Downloads</h2>
+    <input type="search" id="q" placeholder="Search packs or platforms" aria-label="Search packs">
+    <div class="grid" id="grid"></div>
+  </section>
+  <section class="panel" id="detail" hidden></section>
+
+  <footer>Fan-made community site. Not affiliated with Mojang or Microsoft.</footer>
+</div>
+
+<script>
+
+/* ---------- SOUND EFFECTS (synthesized with the Web Audio API: no audio files) ---------- */
+let ctx=null,muted=false;
+function tone(freq,dur,type,vol,slideTo){
+  if(muted)return;
+  // Browsers block audio until the visitor has clicked/tapped once.
+  if(!(navigator.userActivation&&navigator.userActivation.hasBeenActive))return;
+  ctx=ctx||new (window.AudioContext||window.webkitAudioContext)();
+  if(ctx.state==='suspended')ctx.resume();
+  const o=ctx.createOscillator(),g=ctx.createGain(),t=ctx.currentTime;
+  o.type=type;o.frequency.setValueAtTime(freq,t);
+  if(slideTo)o.frequency.exponentialRampToValueAtTime(slideTo,t+dur);
+  g.gain.setValueAtTime(vol,t);g.gain.exponentialRampToValueAtTime(0.0001,t+dur);
+  o.connect(g).connect(ctx.destination);o.start(t);o.stop(t+dur);
+}
+const clickAudio=new Audio('sounds/click.mp3');clickAudio.preload='auto';
+const hoverAudio=new Audio('sounds/hover.mp3');hoverAudio.preload='auto';
+const sfx={
+  hover:()=>{
+    if(muted||!(navigator.userActivation&&navigator.userActivation.hasBeenActive))return;
+    const a=hoverAudio.cloneNode();a.volume=.5;a.play().catch(()=>{});
+  },
+  click:()=>{
+    if(muted||!(navigator.userActivation&&navigator.userActivation.hasBeenActive))return;
+    const a=clickAudio.cloneNode();a.volume=.6;a.play().catch(()=>{});
+  },
+  done:()=>[523,659,784].forEach((f,i)=>setTimeout(()=>tone(f,.12,'triangle',.07),i*90))
+};
+document.addEventListener('pointerover',e=>{
+  const t=e.target.closest('.btn,.card');
+  if(t&&!t.contains(e.relatedTarget))sfx.hover();
+});
+document.addEventListener('click',e=>{
+  const b=e.target.closest('.btn');
+  if(!b)return;
+  b.hasAttribute('download')?sfx.done():sfx.click();
+});
+const muteBtn=document.getElementById('mute');
+muteBtn.addEventListener('click',()=>{muted=!muted;muteBtn.textContent='Sound: '+(muted?'Off':'On')});
+
+/* ---------- PACK LIST + PACK PAGES ----------
+   Packs come from packs.json. Everything is built with textContent, so text from
+   uploaders can never inject HTML into the page. */
+const $=id=>document.getElementById(id);
+function el(tag,attrs,...kids){
+  const e=document.createElement(tag);
+  for(const k in (attrs||{})){k==='text'?e.textContent=attrs[k]:e.setAttribute(k,attrs[k])}
+  kids.forEach(k=>k&&e.appendChild(k));
+  return e;
+}
+function icon(p,cls){
+  if(p.icon)return el('img',{src:p.icon,alt:'',class:'icon '+(cls||'')});
+  const c=document.createElement('canvas');c.width=c.height=8;c.className='icon '+(cls||'');
+  const x=c.getContext('2d'),px=(a,b,w,h,col)=>{x.fillStyle=col;x.fillRect(a,b,w,h)};
+  px(0,0,8,8,'#2a1b0e');px(1,1,6,6,'#8a5a2b');px(1,1,6,1,'#a97439');px(1,3,6,1,'#5c3a18');px(3,3,2,2,'#ffd84a');
+  return c;
+}
+let packs=[];
+function renderList(filter){
+  const grid=$('grid');grid.textContent='';document.title='Skin Central: Legacy Console Edition';
+  const f=(filter||'').toLowerCase().trim();
+  const list=packs.filter(p=>(p.name+' '+p.tags.join(' ')+' '+p.files.map(x=>x.platform).join(' ')).toLowerCase().includes(f));
+  if(!list.length){grid.appendChild(el('p',{class:'empty',text:'No packs match that search. Try a different word.'}));return}
+  list.forEach(p=>{
+    const href='#/pack/'+encodeURIComponent(p.slug);
+    const link=el('a',{href,class:'iconlink','aria-label':'Open '+p.name},icon(p));
+    grid.appendChild(el('div',{class:'card'},link,
+      el('a',{href,class:'name',text:p.name}),
+      el('small',{text:'by '+p.creator+' for '+p.files.map(x=>x.platform).join(', ')}),
+      el('a',{href,class:'btn',text:'View pack'})));
+  });
+}
+function showPack(p){
+  const d=$('detail');d.textContent='';document.title=p.name+' | Skin Central';
+  const dl=el('div',{class:'dl'});
+  p.files.forEach(f=>dl.appendChild(el('a',{class:'btn',href:f.href,download:'',text:f.platform+(f.size?' ('+f.size+')':'')})));
+  d.append(el('a',{class:'btn',href:'#skins',text:'Back to all packs'}),
+    el('div',{class:'head'},icon(p,'big'),el('div',{},
+      el('h2',{text:p.name}),el('p',{class:'by',text:'By '+p.creator+', added '+p.date}),el('p',{class:'tags',text:p.tags.join(', ')}))),
+    el('p',{class:'desc',text:p.description}),el('h3',{text:'Download'}),dl);
+  if(p.images&&p.images.length){
+    const g=el('div',{class:'shots'});
+    p.images.forEach(src=>g.appendChild(el('img',{src,alt:p.name+' preview',loading:'lazy'})));
+    d.append(el('h3',{text:'Screenshots'}),g);
+  }
+}
+function route(){
+  const m=location.hash.match(/^#\/pack\/(.+)$/);
+  const p=m&&packs.find(x=>x.slug===decodeURIComponent(m[1]));
+  $('skins').hidden=!!p;$('detail').hidden=!p;
+  p?showPack(p):renderList($('q').value);
+  window.scrollTo(0,0);
+}
+$('q').addEventListener('input',e=>renderList(e.target.value));
+window.addEventListener('hashchange',route);
+fetch('packs.json').then(r=>r.json()).then(d=>{packs=d;route()})
+  .catch(()=>{$('grid').textContent="Couldn't load the pack list. If you opened this file directly, try the live site instead."});
+
+/* ---------- DISCORD LOGIN ----------
+   Asks the Worker who is logged in. If someone is, the button becomes a log out button. */
+fetch('/api/me').then(r=>r.json()).then(me=>{
+  if(!me.loggedIn)return;
+  const b=$('login');
+  b.textContent='Log out ('+me.user.name+(me.isMod?', Mod':'')+')';
+  b.setAttribute('href','/auth/logout');
+}).catch(()=>{});
+
+/* ---------- RANDOM SPLASH TEXT ----------
+   Picks one line at random each time the page loads. Edit, add or remove lines freely.
+   Keep them short (about 25 characters or less) so they fit on a phone screen. */
+const splashes=[
+  'Now with sound!',
+  'Made by the community!',
+  'Fresh skins daily!',
+  'Pixel perfect!',
+  'Dress to impress!',
+  'Also try the Wii U packs!',
+  'Click all the buttons!',
+  'Fan-made with love!',
+  'Skins for everyone!',
+  'Join the Discord!'
+];
+document.querySelector('.splash').textContent=splashes[Math.floor(Math.random()*splashes.length)];
+</script>
+</body>
+</html>
