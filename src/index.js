@@ -603,6 +603,9 @@ async function route(request, env, ctx) {
   if (p === "/api/submit" && m === "POST") return submit(request, env, ctx);
   if (p === "/api/admin/list" && m === "GET") return adminList(request, env, url);
   if (p === "/api/admin/review" && m === "POST") return review(request, env);
+    if (p === "/api/report" && m === "POST") return report(request, env, ctx);
+  if (p === "/api/admin/reports" && m === "GET") return adminReports(request, env);
+  if (p === "/api/admin/report-close" && m === "POST") return closeReport(request, env);
   if (p.startsWith("/files/") && m === "GET") return serveFile(request, env, url);
 
   if (
