@@ -5,7 +5,7 @@
   "assets": {
     "directory": "./",
     "binding": "ASSETS",
-    "run_worker_first": ["/api/*", "/auth/*", "/admin/*"]
+    "run_worker_first": ["/api/*", "/auth/*", "/admin/*", "/files/*"]
   },
   "vars": {
     "SITE_URL": "https://skincentral.estatic.cc",
