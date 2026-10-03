@@ -1,0 +1,154 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Skin Central: Legacy Console Edition</title>
+<meta name="description" content="Download Legacy Console Edition skins.">
+<link rel="icon" href="images/logo.png">
+<link href="https://fonts.googleapis.com/css2?family=Press+Start+2P&family=VT323&display=swap" rel="stylesheet">
+<style>
+:root{--btn:#8f8f8f;--btn-hi:#c6c6c6;--btn-lo:#3b3b3b;--panel:#2b2622;--gold:#ffff55;--ink:#fff}
+*{box-sizing:border-box}
+
+/* CUSTOM CURSOR: a pixel-art arrow stored inline as an SVG.
+   "1 1" is the hotspot (the tip). The second rule swaps in a gold arrow over clickable things. */
+html{cursor:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='24' height='38' viewBox='0 0 12 19' shape-rendering='crispEdges'%3E%3Cpolygon points='0,0 0,16 4,12 7,19 10,18 7,11 12,11' fill='white' stroke='black' stroke-width='1'/%3E%3C/svg%3E") 1 1, auto}
+a,button,input,.btn{cursor:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='24' height='38' viewBox='0 0 12 19' shape-rendering='crispEdges'%3E%3Cpolygon points='0,0 0,16 4,12 7,19 10,18 7,11 12,11' fill='%23ffff55' stroke='black' stroke-width='1'/%3E%3C/svg%3E") 1 1, pointer}
+
+body{margin:0;min-height:100vh;color:var(--ink);font-family:'VT323',monospace;font-size:22px;
+  background-color:#5a3d26;image-rendering:pixelated;background-size:96px}
+body::before{content:"";position:fixed;inset:0;background:rgba(0,0,0,.45);z-index:-1}
+.wrap{max-width:980px;margin:0 auto;padding:32px 16px 48px}
+
+h1{font-family:'Press Start 2P',monospace;font-weight:400;font-size:clamp(22px,5vw,44px);line-height:1.3;margin:24px 0 8px;
+  text-shadow:4px 4px 0 #3b3b3b;position:relative;display:inline-block}
+.splash{position:absolute;right:-8px;bottom:-26px;font-family:'Press Start 2P',monospace;font-size:12px;color:var(--gold);
+  text-shadow:2px 2px 0 #3f3f00;transform:rotate(-12deg);animation:pulse 1s ease-in-out infinite alternate;white-space:nowrap}
+@keyframes pulse{to{transform:rotate(-12deg) scale(1.12)}}
+.sub{font-size:26px;margin:0 0 28px;color:#e6e6e6;text-shadow:2px 2px 0 #3b3b3b}
+
+.row{display:flex;flex-wrap:wrap;gap:12px;margin-bottom:28px}
+.btn{font-family:'VT323',monospace;font-size:24px;color:#fff;text-decoration:none;text-shadow:2px 2px 0 #3f3f3f;
+  background:var(--btn);padding:8px 20px;border:4px solid;border-color:var(--btn-hi) var(--btn-lo) var(--btn-lo) var(--btn-hi);
+  outline:3px solid #000;outline-offset:0;text-align:center}
+.btn:hover,.btn:focus-visible{color:var(--gold);outline-color:#fff;background:#7c86b8}
+.btn:active{border-color:var(--btn-lo) var(--btn-hi) var(--btn-hi) var(--btn-lo)}
+
+.panel{background:var(--panel);border:4px solid;border-color:#5b5149 #14110f #14110f #5b5149;outline:3px solid #000;padding:20px}
+.panel h2{font-family:'Press Start 2P',monospace;font-weight:400;font-size:16px;margin:0 0 16px;text-shadow:2px 2px 0 #000}
+input[type=search]{width:100%;font:inherit;font-size:24px;color:#fff;background:#000;padding:8px 12px;border:3px solid #6d6d6d;margin-bottom:20px}
+input[type=search]:focus{outline:3px solid var(--gold)}
+
+.grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(170px,1fr));gap:16px}
+.card{background:#3a332d;border:3px solid #14110f;padding:12px;display:flex;flex-direction:column;gap:6px;align-items:center;text-align:center}
+.card:hover{border-color:#fff}
+.card canvas{width:96px;height:96px;image-rendering:pixelated;background:#222;border:3px solid #000}
+.card b{font-weight:400;font-size:24px}
+.card small{font-size:18px;color:#bdb5ac}
+.card .btn{font-size:20px;padding:4px 14px;margin-top:6px;width:100%}
+.empty{grid-column:1/-1;color:#bdb5ac}
+footer{margin-top:28px;font-size:18px;color:#cfc8bf;text-shadow:2px 2px 0 #000}
+@media (prefers-reduced-motion:reduce){.splash{animation:none}}
+.logo{display:block;width:min(100%,720px);height:auto;image-rendering:pixelated}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1><img class="logo" src="images/logo.png" alt="Skin Central" width="1290" height="168"><span class="splash">Now with sound!</span></h1>
+  <p class="sub">Legacy Console Edition skins, one click away.</p>
+
+  <div class="row">
+    <a class="btn" href="#skins">Browse skins</a>
+    <a class="btn" href="https://discord.gg/atQA5ecyxj">Join the Discord</a>
+    <button class="btn" id="mute" type="button">Sound: On</button>
+  </div>
+
+  <section class="panel" id="skins">
+    <h2>Skin library</h2>
+    <input type="search" id="q" placeholder="Search by name or tag" aria-label="Search skins">
+    <div class="grid" id="grid"></div>
+  </section>
+
+  <footer>Fan-made community site. Not affiliated with Mojang or Microsoft.</footer>
+</div>
+
+<script>
+/* ---------- PIXEL DIRT BACKGROUND (generated, so no image file needed) ---------- */
+(function(){
+  const c=document.createElement('canvas');c.width=c.height=16;const x=c.getContext('2d');
+  const shades=['#5a3d26','#6b4a2e','#4f3520','#7a5636','#443020'];
+  for(let i=0;i<16;i++)for(let j=0;j<16;j++){x.fillStyle=shades[Math.floor(Math.random()*shades.length)];x.fillRect(i,j,1,1)}
+  document.body.style.backgroundImage='url('+c.toDataURL()+')';
+})();
+
+/* ---------- SOUND EFFECTS (synthesized with the Web Audio API: no audio files) ---------- */
+let ctx=null,muted=false;
+function tone(freq,dur,type,vol,slideTo){
+  if(muted)return;
+  // Browsers block audio until the visitor has clicked/tapped once.
+  if(!(navigator.userActivation&&navigator.userActivation.hasBeenActive))return;
+  ctx=ctx||new (window.AudioContext||window.webkitAudioContext)();
+  if(ctx.state==='suspended')ctx.resume();
+  const o=ctx.createOscillator(),g=ctx.createGain(),t=ctx.currentTime;
+  o.type=type;o.frequency.setValueAtTime(freq,t);
+  if(slideTo)o.frequency.exponentialRampToValueAtTime(slideTo,t+dur);
+  g.gain.setValueAtTime(vol,t);g.gain.exponentialRampToValueAtTime(0.0001,t+dur);
+  o.connect(g).connect(ctx.destination);o.start(t);o.stop(t+dur);
+}
+const clickAudio=new Audio('sounds/click.mp3');clickAudio.preload='auto';
+const sfx={
+  hover:()=>tone(660,.04,'square',.025),
+  click:()=>{
+    if(muted||!(navigator.userActivation&&navigator.userActivation.hasBeenActive))return;
+    const a=clickAudio.cloneNode();a.volume=.6;a.play().catch(()=>{});
+  },
+  done:()=>[523,659,784].forEach((f,i)=>setTimeout(()=>tone(f,.12,'triangle',.07),i*90))
+};
+document.addEventListener('pointerover',e=>{
+  const t=e.target.closest('.btn,.card');
+  if(t&&!t.contains(e.relatedTarget))sfx.hover();
+});
+document.addEventListener('click',e=>{
+  const b=e.target.closest('.btn');
+  if(!b)return;
+  b.hasAttribute('download')?sfx.done():sfx.click();
+});
+const muteBtn=document.getElementById('mute');
+muteBtn.addEventListener('click',()=>{muted=!muted;muteBtn.textContent='Sound: '+(muted?'Off':'On')});
+
+/* ---------- SKIN LIBRARY (placeholder data: replace with your real skins) ---------- */
+const skins=[
+  {name:'Forest Ranger',by:'Placeholder',tags:'green hunter',skin:'#c8946a',hair:'#3b2a1a',eye:'#2f7d32',file:'skins/forest-ranger.png'},
+  {name:'Night Knight',by:'Placeholder',tags:'dark armor',skin:'#e0b48f',hair:'#14110f',eye:'#3a5bd9',file:'skins/night-knight.png'},
+  {name:'Sunset Miner',by:'Placeholder',tags:'orange casual',skin:'#a9744f',hair:'#7a3b12',eye:'#6b3e1f',file:'skins/sunset-miner.png'},
+  {name:'Frost Mage',by:'Placeholder',tags:'blue fantasy',skin:'#f1cfb0',hair:'#cfe8f5',eye:'#3a8fd9',file:'skins/frost-mage.png'},
+  {name:'Rose Wanderer',by:'Placeholder',tags:'pink casual',skin:'#8d5a3b',hair:'#d94f8a',eye:'#2a2a2a',file:'skins/rose-wanderer.png'},
+  {name:'Golden Pilot',by:'Placeholder',tags:'yellow retro',skin:'#e8b98f',hair:'#e6c23a',eye:'#3a5bd9',file:'skins/golden-pilot.png'}
+];
+function face(s){
+  const c=document.createElement('canvas');c.width=c.height=8;const x=c.getContext('2d');
+  const px=(a,b,w,h,col)=>{x.fillStyle=col;x.fillRect(a,b,w,h)};
+  px(0,0,8,8,s.skin);px(0,0,8,2,s.hair);px(0,2,1,2,s.hair);px(7,2,1,2,s.hair);
+  px(1,4,1,1,'#fff');px(2,4,1,1,s.eye);px(5,4,1,1,s.eye);px(6,4,1,1,'#fff');
+  px(3,6,2,1,'rgba(0,0,0,.35)');
+  return c;
+}
+const grid=document.getElementById('grid');
+function render(filter){
+  grid.innerHTML='';
+  const f=(filter||'').toLowerCase().trim();
+  const list=skins.filter(s=>(s.name+' '+s.tags).toLowerCase().includes(f));
+  if(!list.length){grid.innerHTML='<p class="empty">No skins match that search. Try a different word.</p>';return}
+  list.forEach(s=>{
+    const card=document.createElement('div');card.className='card';
+    card.appendChild(face(s));
+    card.insertAdjacentHTML('beforeend',`<b>${s.name}</b><small>by ${s.by}</small><a class="btn" href="${s.file}" download>Download</a>`);
+    grid.appendChild(card);
+  });
+}
+document.getElementById('q').addEventListener('input',e=>render(e.target.value));
+render();
+</script>
+</body>
+</html>
