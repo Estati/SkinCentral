@@ -534,6 +534,51 @@ async function closeReport(request, env) {
   return json({ ok: true });
 }
 
+/* ---------- MODERATION: ALL PACKS + EDIT DETAILS ---------- */
+async function adminAll(request, env) {
+  const s = await readSession(env, request);
+  if (!s || !s.mod) return json({ error: "Moderators only." }, 403);
+  const { results } = await env.DB.prepare(
+    "SELECT * FROM packs ORDER BY created_at DESC LIMIT 200"
+  ).all();
+  return json(
+    results.map((r) => ({
+      ...packView(r),
+      status: r.status,
+      creatorId: r.creator_id,
+      denyReason: r.deny_reason,
+    }))
+  );
+}
+
+async function editPack(request, env) {
+  const s = await readSession(env, request);
+  if (!s || !s.mod) return json({ error: "Moderators only." }, 403);
+  if (!sameOrigin(request, env)) return json({ error: "Bad origin." }, 403);
+  let body;
+  try {
+    body = await request.json();
+  } catch {
+    return json({ error: "Bad request." }, 400);
+  }
+  const id = String(body.id || "");
+  if (!/^[a-f0-9]{12}$/.test(id)) return json({ error: "Bad pack id." }, 400);
+  const name = clean(body.name, 40);
+  const description = clean(body.description, 500);
+  if (name.length < 3) return json({ error: "Pack name must be at least 3 characters." }, 400);
+  const tags = [];
+  for (const t of clean(body.tags, 200).split(",")) {
+    const tag = clean(t, 20);
+    if (tag && !tags.some((x) => x.toLowerCase() === tag.toLowerCase())) tags.push(tag);
+  }
+  tags.length = Math.min(tags.length, 5);
+  const r = await env.DB.prepare(
+    "UPDATE packs SET name = ?, description = ?, tags = ? WHERE id = ?"
+  ).bind(name, description, JSON.stringify(tags), id).run();
+  if (!r.meta.changes) return json({ error: "Pack not found." }, 404);
+  return json({ ok: true });
+}
+
 /* ---------- FILE DOWNLOADS (from R2) ---------- */
 async function serveFile(request, env, url) {
   // Paths look like /files/<id>/icon  or  /files/<id>/<platform>/<filename>
@@ -606,6 +651,8 @@ async function route(request, env, ctx) {
     if (p === "/api/report" && m === "POST") return report(request, env, ctx);
   if (p === "/api/admin/reports" && m === "GET") return adminReports(request, env);
   if (p === "/api/admin/report-close" && m === "POST") return closeReport(request, env);
+    if (p === "/api/admin/all" && m === "GET") return adminAll(request, env);
+  if (p === "/api/admin/edit" && m === "POST") return editPack(request, env);
   if (p.startsWith("/files/") && m === "GET") return serveFile(request, env, url);
 
   if (
