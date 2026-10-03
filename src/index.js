@@ -7,6 +7,9 @@ const LIMITS = {
   pack: 5 * 1024 * 1024,   // each pack file, max size
   total: 20 * 1024 * 1024, // whole submission, max size
   maxPending: 3,           // how many packs one person can have waiting at once
+  anonTotal: 10 * 1024 * 1024, // anonymous upload (no login), whole submission, max size
+  anonPerDay: 2,           // anonymous uploads allowed per visitor per day
+  anonMaxPending: 10,      // anonymous packs allowed to wait for review across the whole site
 };
 const PLATFORMS = {
   xbox360: "Xbox 360",
@@ -266,23 +269,89 @@ async function myPacks(request, env) {
   return json(results);
 }
 
+// Asks Cloudflare Turnstile whether the visitor passed the human check.
+async function checkHuman(request, env) {
+  if (!env.TURNSTILE_SECRET) return false;
+  const token = request.headers.get("X-Turnstile-Token") || "";
+  if (!token || token.length > 2048) return false;
+  const params = new URLSearchParams({ secret: env.TURNSTILE_SECRET, response: token });
+  const ip = request.headers.get("CF-Connecting-IP");
+  if (ip) params.set("remoteip", ip);
+  try {
+    const res = await fetch("https://challenges.cloudflare.com/turnstile/v0/siteverify", {
+      method: "POST",
+      body: params,
+    });
+    const out = await res.json();
+    return out.success === true;
+  } catch {
+    return false;
+  }
+}
+
+// A scrambled (hashed) tag for a visitor's IP address. The real IP is never stored.
+async function visitorTag(request, env) {
+  let ip = request.headers.get("CF-Connecting-IP") || "unknown";
+  // For IPv6 only the first half is used, so changing the end of the address doesn't dodge the limit.
+  if (ip.includes(":")) ip = ip.split(":").slice(0, 4).join(":");
+  const sig = await crypto.subtle.sign(
+    "HMAC",
+    await hmacKey(env.SESSION_SECRET),
+    enc.encode("visitor:" + ip)
+  );
+  return toB64url(sig).slice(0, 24);
+}
+
 async function submit(request, env, ctx) {
-  const s = await readSession(env, request);
-  if (!s) return json({ error: "Please log in with Discord first." }, 401);
+  // Anonymous uploads use /api/submit?anon=1: no login, but a human check and stricter limits.
+  const anon = new URL(request.url).searchParams.get("anon") === "1";
+  let s;
+  if (anon) {
+    s = { id: "anon", name: "Anonymous" };
+  } else {
+    s = await readSession(env, request);
+    if (!s) return json({ error: "Please log in with Discord first." }, 401);
+  }
   if (!sameOrigin(request, env)) return json({ error: "Bad origin." }, 403);
 
+  const totalMax = anon ? LIMITS.anonTotal : LIMITS.total;
   const len = Number(request.headers.get("Content-Length") || 0);
-  if (len > LIMITS.total + 1024 * 1024) {
+  if (len > totalMax + 1024 * 1024) {
     return json({ error: "That upload is too big." }, 413);
   }
 
-  const pending = await env.DB.prepare(
-    "SELECT COUNT(*) AS n FROM packs WHERE creator_id = ? AND status = 'pending'"
-  ).bind(s.id).first();
-  if (pending.n >= LIMITS.maxPending) {
-    return json({
-      error: `You already have ${LIMITS.maxPending} packs waiting for review. Please wait for a moderator.`,
-    }, 429);
+  let visitor = null;
+  if (anon) {
+    if (!(await checkHuman(request, env))) {
+      return json({ error: "The human check failed. Please reload the page and try again." }, 400);
+    }
+    visitor = await visitorTag(request, env);
+    const now = Math.floor(Date.now() / 1000);
+    const today = await env.DB.prepare(
+      "SELECT COUNT(*) AS n FROM packs WHERE ip_hash = ? AND created_at > ?"
+    ).bind(visitor, now - 86400).first();
+    if (today.n >= LIMITS.anonPerDay) {
+      return json({
+        error: `Anonymous uploads are limited to ${LIMITS.anonPerDay} per day. Try again tomorrow, or log in with Discord.`,
+      }, 429);
+    }
+    const queue = await env.DB.prepare(
+      "SELECT COUNT(*) AS n FROM packs WHERE creator_id = 'anon' AND status = 'pending'"
+    ).first();
+    if (queue.n >= LIMITS.anonMaxPending) {
+      return json({
+        error: "Too many anonymous packs are waiting for review right now. Please try again later, or log in with Discord.",
+      }, 429);
+    }
+  } else {
+    const pending = await env.DB.prepare(
+      "SELECT COUNT(*) AS n FROM packs WHERE creator_id = ? AND status = 'pending'"
+    ).bind(s.id).first();
+    if (pending.n >= LIMITS.maxPending) {
+      return json({
+        error: `You already have ${LIMITS.maxPending} packs waiting for review. Please wait for a moderator.`,
+      }, 429);
+    }
   }
 
   let form;
@@ -347,7 +416,7 @@ async function submit(request, env, ctx) {
     total += f.size;
   }
   if (!files.length) return json({ error: "Please add at least one pack file." }, 400);
-  if (total > LIMITS.total) return json({ error: "That upload is too big overall (max 20 MB)." }, 400);
+  if (total > totalMax) return json({ error: `That upload is too big overall (max ${Math.round(totalMax / 1048576)} MB).` }, 400);
 
   const done = [];
   try {
@@ -359,11 +428,11 @@ async function submit(request, env, ctx) {
     }
     await env.DB.prepare(
       `INSERT INTO packs
-       (id, slug, name, description, tags, creator_id, creator_name, status, icon_key, images, files, created_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?, 'pending', 'icon', ?, ?, ?)`
+       (id, slug, name, description, tags, creator_id, creator_name, status, icon_key, images, files, created_at, ip_hash)
+       VALUES (?, ?, ?, ?, ?, ?, ?, 'pending', 'icon', ?, ?, ?, ?)`
     ).bind(
       id, slug, name, description, JSON.stringify(tags), s.id, clean(s.name, 60),
-      JSON.stringify(images), JSON.stringify(files), Math.floor(Date.now() / 1000)
+      JSON.stringify(images), JSON.stringify(files), Math.floor(Date.now() / 1000), visitor
     ).run();
   } catch (e) {
     await Promise.allSettled(done.map((k) => env.FILES.delete(k)));
@@ -384,7 +453,7 @@ async function submit(request, env, ctx) {
             url: env.SITE_URL + "/#/admin",
             color: 0x8f8f8f,
             fields: [
-              { name: "By", value: clean(s.name, 60) || "unknown" },
+              { name: "By", value: anon ? "Anonymous (no login)" : (clean(s.name, 60) || "unknown") },
               { name: "Platforms", value: files.map((f) => f.platform).join(", ") },
             ],
           }],
@@ -412,6 +481,8 @@ async function adminList(request, env, url) {
       ...packView(r),
       status: r.status,
       creatorId: r.creator_id,
+      anonymous: r.creator_id === "anon",
+      visitorTag: r.ip_hash ? r.ip_hash.slice(0, 8) : null,
       denyReason: r.deny_reason,
     }))
   );
@@ -546,6 +617,8 @@ async function adminAll(request, env) {
       ...packView(r),
       status: r.status,
       creatorId: r.creator_id,
+      anonymous: r.creator_id === "anon",
+      visitorTag: r.ip_hash ? r.ip_hash.slice(0, 8) : null,
       denyReason: r.deny_reason,
     }))
   );
