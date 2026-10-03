@@ -6,37 +6,39 @@
 <title>Skin Central: Legacy Console Edition</title>
 <meta name="description" content="Download Legacy Console Edition skins.">
 <link rel="icon" href="images/logo.png">
-<link href="https://fonts.googleapis.com/css2?family=Press+Start+2P&family=VT323&display=swap" rel="stylesheet">
+<link href="https://fonts.googleapis.com/css2?family=VT323&display=swap" rel="stylesheet">
 <style>
+@font-face{font-family:'Mojang';src:url('fonts/Mojang-Regular.ttf') format('truetype');font-weight:400;font-display:swap}
+@font-face{font-family:'Mojang';src:url('fonts/Mojang-Bold.ttf') format('truetype');font-weight:700;font-display:swap}
 :root{--btn:#8f8f8f;--btn-hi:#c6c6c6;--btn-lo:#3b3b3b;--panel:#2b2622;--gold:#ffff55;--ink:#fff}
 *{box-sizing:border-box}
 
-/* CUSTOM CURSOR: a pixel-art arrow stored inline as an SVG.
+/* CUSTOM CURSOR: images/cursor.cur is tried first. If it's missing, the inline pixel-art arrow below is used.
    "1 1" is the hotspot (the tip). The second rule swaps in a gold arrow over clickable things. */
-html{cursor:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='24' height='38' viewBox='0 0 12 19' shape-rendering='crispEdges'%3E%3Cpolygon points='0,0 0,16 4,12 7,19 10,18 7,11 12,11' fill='white' stroke='black' stroke-width='1'/%3E%3C/svg%3E") 1 1, auto}
-a,button,input,.btn{cursor:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='24' height='38' viewBox='0 0 12 19' shape-rendering='crispEdges'%3E%3Cpolygon points='0,0 0,16 4,12 7,19 10,18 7,11 12,11' fill='%23ffff55' stroke='black' stroke-width='1'/%3E%3C/svg%3E") 1 1, pointer}
+html{cursor:url("images/cursor.cur"),url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='24' height='38' viewBox='0 0 12 19' shape-rendering='crispEdges'%3E%3Cpolygon points='0,0 0,16 4,12 7,19 10,18 7,11 12,11' fill='white' stroke='black' stroke-width='1'/%3E%3C/svg%3E") 1 1, auto}
+a,button,input,.btn{cursor:url("images/cursor.cur"),url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='24' height='38' viewBox='0 0 12 19' shape-rendering='crispEdges'%3E%3Cpolygon points='0,0 0,16 4,12 7,19 10,18 7,11 12,11' fill='%23ffff55' stroke='black' stroke-width='1'/%3E%3C/svg%3E") 1 1, pointer}
 
-body{margin:0;min-height:100vh;color:var(--ink);font-family:'VT323',monospace;font-size:22px;
+body{margin:0;min-height:100vh;color:var(--ink);font-family:'Mojang','VT323',monospace;font-size:24px;-webkit-font-smoothing:none;
   background-color:#5a3d26;image-rendering:pixelated;background-size:96px}
 body::before{content:"";position:fixed;inset:0;background:rgba(0,0,0,.45);z-index:-1}
 .wrap{max-width:980px;margin:0 auto;padding:32px 16px 48px}
 
-h1{font-family:'Press Start 2P',monospace;font-weight:400;font-size:clamp(22px,5vw,44px);line-height:1.3;margin:24px 0 8px;
+h1{font-family:'Mojang','VT323',monospace;font-weight:400;font-size:clamp(22px,5vw,44px);line-height:1.3;margin:24px 0 8px;
   text-shadow:4px 4px 0 #3b3b3b;position:relative;display:inline-block}
-.splash{position:absolute;right:-8px;bottom:-26px;font-family:'Press Start 2P',monospace;font-size:12px;color:var(--gold);
+.splash{position:absolute;right:-8px;bottom:-26px;font-family:'Mojang','VT323',monospace;font-size:16px;color:var(--gold);
   text-shadow:2px 2px 0 #3f3f00;transform:rotate(-12deg);animation:pulse 1s ease-in-out infinite alternate;white-space:nowrap}
 @keyframes pulse{to{transform:rotate(-12deg) scale(1.12)}}
 .sub{font-size:26px;margin:0 0 28px;color:#e6e6e6;text-shadow:2px 2px 0 #3b3b3b}
 
 .row{display:flex;flex-wrap:wrap;gap:12px;margin-bottom:28px}
-.btn{font-family:'VT323',monospace;font-size:24px;color:#fff;text-decoration:none;text-shadow:2px 2px 0 #3f3f3f;
+.btn{font-family:'Mojang','VT323',monospace;font-size:24px;color:#fff;text-decoration:none;text-shadow:2px 2px 0 #3f3f3f;
   background:var(--btn);padding:8px 20px;border:4px solid;border-color:var(--btn-hi) var(--btn-lo) var(--btn-lo) var(--btn-hi);
   outline:3px solid #000;outline-offset:0;text-align:center}
 .btn:hover,.btn:focus-visible{color:var(--gold);outline-color:#fff;background:#7c86b8}
 .btn:active{border-color:var(--btn-lo) var(--btn-hi) var(--btn-hi) var(--btn-lo)}
 
 .panel{background:var(--panel);border:4px solid;border-color:#5b5149 #14110f #14110f #5b5149;outline:3px solid #000;padding:20px}
-.panel h2{font-family:'Press Start 2P',monospace;font-weight:400;font-size:16px;margin:0 0 16px;text-shadow:2px 2px 0 #000}
+.panel h2{font-family:'Mojang','VT323',monospace;font-weight:700;font-size:24px;margin:0 0 16px;text-shadow:2px 2px 0 #000}
 input[type=search]{width:100%;font:inherit;font-size:24px;color:#fff;background:#000;padding:8px 12px;border:3px solid #6d6d6d;margin-bottom:20px}
 input[type=search]:focus{outline:3px solid var(--gold)}
 
@@ -51,6 +53,20 @@ input[type=search]:focus{outline:3px solid var(--gold)}
 footer{margin-top:28px;font-size:18px;color:#cfc8bf;text-shadow:2px 2px 0 #000}
 @media (prefers-reduced-motion:reduce){.splash{animation:none}}
 .logo{display:block;width:min(100%,720px);height:auto;image-rendering:pixelated}
+
+.icon{display:block;width:96px;height:96px;image-rendering:pixelated;background:#222;border:3px solid #000}
+.icon.big{width:160px;height:160px}
+.card .name{font-weight:700;font-size:24px;color:#fff;text-decoration:none}
+.card .name:hover{color:var(--gold)}
+.iconlink:hover .icon,.iconlink:focus-visible .icon{border-color:var(--gold)}
+.head{display:flex;gap:20px;align-items:center;flex-wrap:wrap;margin:20px 0}
+.head h2{font-size:32px;margin:0 0 8px}
+.by,.tags{margin:0 0 6px;color:#bdb5ac}
+.desc{max-width:60ch;line-height:1.3}
+#detail h3{font-size:24px;margin:20px 0 10px}
+.dl{display:flex;flex-wrap:wrap;gap:12px}
+.shots{display:grid;grid-template-columns:repeat(auto-fill,minmax(220px,1fr));gap:12px}
+.shots img{width:100%;image-rendering:pixelated;border:3px solid #000}
 </style>
 </head>
 <body>
@@ -59,16 +75,17 @@ footer{margin-top:28px;font-size:18px;color:#cfc8bf;text-shadow:2px 2px 0 #000}
   <p class="sub">Legacy Console Edition skins, one click away.</p>
 
   <div class="row">
-    <a class="btn" href="#skins">Browse skins</a>
+    <a class="btn" href="#skins">Browse packs</a>
     <a class="btn" href="https://discord.gg/atQA5ecyxj">Join the Discord</a>
     <button class="btn" id="mute" type="button">Sound: On</button>
   </div>
 
   <section class="panel" id="skins">
-    <h2>Skin library</h2>
-    <input type="search" id="q" placeholder="Search by name or tag" aria-label="Search skins">
+    <h2>Downloads</h2>
+    <input type="search" id="q" placeholder="Search packs or platforms" aria-label="Search packs">
     <div class="grid" id="grid"></div>
   </section>
+  <section class="panel" id="detail" hidden></section>
 
   <footer>Fan-made community site. Not affiliated with Mojang or Microsoft.</footer>
 </div>
@@ -97,8 +114,12 @@ function tone(freq,dur,type,vol,slideTo){
   o.connect(g).connect(ctx.destination);o.start(t);o.stop(t+dur);
 }
 const clickAudio=new Audio('sounds/click.mp3');clickAudio.preload='auto';
+const hoverAudio=new Audio('sounds/hover.mp3');hoverAudio.preload='auto';
 const sfx={
-  hover:()=>tone(660,.04,'square',.025),
+  hover:()=>{
+    if(muted||!(navigator.userActivation&&navigator.userActivation.hasBeenActive))return;
+    const a=hoverAudio.cloneNode();a.volume=.5;a.play().catch(()=>{});
+  },
   click:()=>{
     if(muted||!(navigator.userActivation&&navigator.userActivation.hasBeenActive))return;
     const a=clickAudio.cloneNode();a.volume=.6;a.play().catch(()=>{});
@@ -117,38 +138,63 @@ document.addEventListener('click',e=>{
 const muteBtn=document.getElementById('mute');
 muteBtn.addEventListener('click',()=>{muted=!muted;muteBtn.textContent='Sound: '+(muted?'Off':'On')});
 
-/* ---------- SKIN LIBRARY (placeholder data: replace with your real skins) ---------- */
-const skins=[
-  {name:'Forest Ranger',by:'Placeholder',tags:'green hunter',skin:'#c8946a',hair:'#3b2a1a',eye:'#2f7d32',file:'skins/forest-ranger.png'},
-  {name:'Night Knight',by:'Placeholder',tags:'dark armor',skin:'#e0b48f',hair:'#14110f',eye:'#3a5bd9',file:'skins/night-knight.png'},
-  {name:'Sunset Miner',by:'Placeholder',tags:'orange casual',skin:'#a9744f',hair:'#7a3b12',eye:'#6b3e1f',file:'skins/sunset-miner.png'},
-  {name:'Frost Mage',by:'Placeholder',tags:'blue fantasy',skin:'#f1cfb0',hair:'#cfe8f5',eye:'#3a8fd9',file:'skins/frost-mage.png'},
-  {name:'Rose Wanderer',by:'Placeholder',tags:'pink casual',skin:'#8d5a3b',hair:'#d94f8a',eye:'#2a2a2a',file:'skins/rose-wanderer.png'},
-  {name:'Golden Pilot',by:'Placeholder',tags:'yellow retro',skin:'#e8b98f',hair:'#e6c23a',eye:'#3a5bd9',file:'skins/golden-pilot.png'}
-];
-function face(s){
-  const c=document.createElement('canvas');c.width=c.height=8;const x=c.getContext('2d');
-  const px=(a,b,w,h,col)=>{x.fillStyle=col;x.fillRect(a,b,w,h)};
-  px(0,0,8,8,s.skin);px(0,0,8,2,s.hair);px(0,2,1,2,s.hair);px(7,2,1,2,s.hair);
-  px(1,4,1,1,'#fff');px(2,4,1,1,s.eye);px(5,4,1,1,s.eye);px(6,4,1,1,'#fff');
-  px(3,6,2,1,'rgba(0,0,0,.35)');
+/* ---------- PACK LIST + PACK PAGES ----------
+   Packs come from packs.json. Everything is built with textContent, so text from
+   uploaders can never inject HTML into the page. */
+const $=id=>document.getElementById(id);
+function el(tag,attrs,...kids){
+  const e=document.createElement(tag);
+  for(const k in (attrs||{})){k==='text'?e.textContent=attrs[k]:e.setAttribute(k,attrs[k])}
+  kids.forEach(k=>k&&e.appendChild(k));
+  return e;
+}
+function icon(p,cls){
+  if(p.icon)return el('img',{src:p.icon,alt:'',class:'icon '+(cls||'')});
+  const c=document.createElement('canvas');c.width=c.height=8;c.className='icon '+(cls||'');
+  const x=c.getContext('2d'),px=(a,b,w,h,col)=>{x.fillStyle=col;x.fillRect(a,b,w,h)};
+  px(0,0,8,8,'#2a1b0e');px(1,1,6,6,'#8a5a2b');px(1,1,6,1,'#a97439');px(1,3,6,1,'#5c3a18');px(3,3,2,2,'#ffd84a');
   return c;
 }
-const grid=document.getElementById('grid');
-function render(filter){
-  grid.innerHTML='';
+let packs=[];
+function renderList(filter){
+  const grid=$('grid');grid.textContent='';document.title='Skin Central: Legacy Console Edition';
   const f=(filter||'').toLowerCase().trim();
-  const list=skins.filter(s=>(s.name+' '+s.tags).toLowerCase().includes(f));
-  if(!list.length){grid.innerHTML='<p class="empty">No skins match that search. Try a different word.</p>';return}
-  list.forEach(s=>{
-    const card=document.createElement('div');card.className='card';
-    card.appendChild(face(s));
-    card.insertAdjacentHTML('beforeend',`<b>${s.name}</b><small>by ${s.by}</small><a class="btn" href="${s.file}" download>Download</a>`);
-    grid.appendChild(card);
+  const list=packs.filter(p=>(p.name+' '+p.tags.join(' ')+' '+p.files.map(x=>x.platform).join(' ')).toLowerCase().includes(f));
+  if(!list.length){grid.appendChild(el('p',{class:'empty',text:'No packs match that search. Try a different word.'}));return}
+  list.forEach(p=>{
+    const href='#/pack/'+encodeURIComponent(p.slug);
+    const link=el('a',{href,class:'iconlink','aria-label':'Open '+p.name},icon(p));
+    grid.appendChild(el('div',{class:'card'},link,
+      el('a',{href,class:'name',text:p.name}),
+      el('small',{text:'by '+p.creator+' for '+p.files.map(x=>x.platform).join(', ')}),
+      el('a',{href,class:'btn',text:'View pack'})));
   });
 }
-document.getElementById('q').addEventListener('input',e=>render(e.target.value));
-render();
+function showPack(p){
+  const d=$('detail');d.textContent='';document.title=p.name+' | Skin Central';
+  const dl=el('div',{class:'dl'});
+  p.files.forEach(f=>dl.appendChild(el('a',{class:'btn',href:f.href,download:'',text:f.platform+(f.size?' ('+f.size+')':'')})));
+  d.append(el('a',{class:'btn',href:'#skins',text:'Back to all packs'}),
+    el('div',{class:'head'},icon(p,'big'),el('div',{},
+      el('h2',{text:p.name}),el('p',{class:'by',text:'By '+p.creator+', added '+p.date}),el('p',{class:'tags',text:p.tags.join(', ')}))),
+    el('p',{class:'desc',text:p.description}),el('h3',{text:'Download'}),dl);
+  if(p.images&&p.images.length){
+    const g=el('div',{class:'shots'});
+    p.images.forEach(src=>g.appendChild(el('img',{src,alt:p.name+' preview',loading:'lazy'})));
+    d.append(el('h3',{text:'Screenshots'}),g);
+  }
+}
+function route(){
+  const m=location.hash.match(/^#\/pack\/(.+)$/);
+  const p=m&&packs.find(x=>x.slug===decodeURIComponent(m[1]));
+  $('skins').hidden=!!p;$('detail').hidden=!p;
+  p?showPack(p):renderList($('q').value);
+  window.scrollTo(0,0);
+}
+$('q').addEventListener('input',e=>renderList(e.target.value));
+window.addEventListener('hashchange',route);
+fetch('packs.json').then(r=>r.json()).then(d=>{packs=d;route()})
+  .catch(()=>{$('grid').textContent="Couldn't load the pack list. If you opened this file directly, try the live site instead."});
 </script>
 </body>
 </html>
