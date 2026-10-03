@@ -381,7 +381,7 @@ async function submit(request, env, ctx) {
           embeds: [{
             title: name,
             description: description.slice(0, 300) || "(no description)",
-            url: env.SITE_URL + "/admin/",
+            url: env.SITE_URL + "/#/admin",
             color: 0x8f8f8f,
             fields: [
               { name: "By", value: clean(s.name, 60) || "unknown" },
