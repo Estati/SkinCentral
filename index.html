@@ -625,20 +625,61 @@ function showAccount(){
         }else{msg.className='msg err';msg.textContent=d.error||'That did not work.'}
       }catch{msg.className='msg err';msg.textContent='Network problem. Try again.'}
     }
+    // Turns one pack card into an edit form (name, description, tags).
+    function showEdit(p,card){
+      const name=el('input',{type:'text',maxlength:'40',value:p.name,'aria-label':'Pack name'});
+      const desc=el('textarea',{maxlength:'500','aria-label':'Description'});desc.value=p.description||'';
+      const tags=el('input',{type:'text',maxlength:'200',value:(p.tags||[]).join(', '),'aria-label':'Tags, separated by commas'});
+      const emsg=el('p',{class:'msg',role:'status'});
+      const save=el('button',{class:'btn',type:'button',text:'Save changes'});
+      const cancel=el('button',{class:'btn',type:'button',text:'Cancel'});
+      cancel.addEventListener('click',load);
+      save.addEventListener('click',async()=>{
+        emsg.className='msg';emsg.textContent='';
+        if(name.value.trim().length<3){emsg.className='msg err';emsg.textContent='Pack name must be at least 3 characters.';return}
+        save.disabled=true;emsg.textContent='Saving...';
+        try{
+          const r=await fetch('/api/my/edit',{method:'POST',headers:{'Content-Type':'application/json'},
+            body:JSON.stringify({id:p.id,name:name.value,description:desc.value,tags:tags.value})});
+          const d=await r.json().catch(()=>({}));
+          if(r.ok&&d.ok){
+            const g=packs.find(x=>x.id===p.id);   // keep the gallery in step with the edit
+            if(g){g.name=d.name;g.description=d.description;g.tags=d.tags}
+            msg.className='msg ok';
+            msg.textContent=p.status==='denied'?'Saved. Your pack is back in the queue for review.':'Saved.';
+            load();return;
+          }
+          emsg.className='msg err';emsg.textContent=d.error||'That did not work.';
+        }catch{emsg.className='msg err';emsg.textContent='Network problem. Try again.'}
+        save.disabled=false;
+      });
+      card.textContent='';
+      card.append(
+        el('h3',{text:'Edit pack'}),
+        el('label',{text:'Pack name'}),name,
+        el('label',{text:'Description (optional)'}),desc,
+        el('label',{text:'Tags, separated by commas (up to 5)'}),tags,
+        p.status==='denied'?el('p',{class:'hint',text:'This pack was denied. Saving sends it back to Pending for another review.'}):null,
+        emsg,el('div',{class:'dl'},save,cancel));
+    }
     function load(){
       fetch('/api/my',{cache:'no-store'}).then(r=>r.ok?r.json():Promise.reject()).then(items=>{
         list.textContent='';
         if(!items.length){list.appendChild(el('p',{class:'empty',text:'You have not uploaded any packs yet.'}));return}
         items.forEach(p=>{
+          const card=el('div',{class:'card admin'});
+          const edit=el('button',{class:'btn',type:'button',text:'Edit'});
+          edit.addEventListener('click',()=>{msg.textContent='';showEdit(p,card)});
           const del=el('button',{class:'btn',type:'button',text:'Delete'});
           del.addEventListener('click',()=>askConfirm('Delete this pack?',
             '"'+p.name+'" and all of its files will be deleted for good. This cannot be undone.',
             'Yes, delete it',()=>remove(p)));
-          list.appendChild(el('div',{class:'card admin'},
+          card.append(
             el('h3',{text:p.name}),
             el('p',{class:'by',text:'Status: '+p.status[0].toUpperCase()+p.status.slice(1)+'. Uploaded '+new Date(p.created_at*1000).toLocaleDateString()+'.'}),
             p.deny_reason?el('p',{class:'by',text:'Reason: '+p.deny_reason}):null,
-            el('div',{class:'dl'},del)));
+            el('div',{class:'dl'},edit,del));
+          list.appendChild(card);
         });
       }).catch(()=>{list.textContent='Could not load your packs.'});
     }
