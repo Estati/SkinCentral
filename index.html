@@ -22,7 +22,7 @@
 /* CUSTOM CURSOR: images/cursor.cur is tried first. If it's missing, the inline pixel-art arrow below is used.
    "1 1" is the hotspot (the tip). The second rule swaps in a gold arrow over clickable things. */
 html{cursor:url("images/cursor.cur"),url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='24' height='38' viewBox='0 0 12 19' shape-rendering='crispEdges'%3E%3Cpolygon points='0,0 0,16 4,12 7,19 10,18 7,11 12,11' fill='white' stroke='black' stroke-width='1'/%3E%3C/svg%3E") 1 1, auto}
-a,button,input,.btn{cursor:url("images/cursor.cur"),url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='24' height='38' viewBox='0 0 12 19' shape-rendering='crispEdges'%3E%3Cpolygon points='0,0 0,16 4,12 7,19 10,18 7,11 12,11' fill='%23ffff55' stroke='black' stroke-width='1'/%3E%3C/svg%3E") 1 1, pointer}
+a,button,input,textarea,.btn{cursor:url("images/cursor.cur"),url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='24' height='38' viewBox='0 0 12 19' shape-rendering='crispEdges'%3E%3Cpolygon points='0,0 0,16 4,12 7,19 10,18 7,11 12,11' fill='%23ffff55' stroke='black' stroke-width='1'/%3E%3C/svg%3E") 1 1, pointer}
 
 /* BACKGROUND: the dirt tile now lives in images/dirt.png instead of being embedded in this file. */
 body{margin:0;min-height:100vh;color:var(--ink);font-family:'Mojang','VT323',monospace;font-size:var(--b);line-height:1.25;word-spacing:.25em;
@@ -72,6 +72,17 @@ input[type=search]:focus{outline:3px solid var(--gold)}
 .dl{display:flex;flex-wrap:wrap;gap:12px}
 .shots{display:grid;grid-template-columns:repeat(auto-fill,minmax(200px,1fr));gap:12px}
 .shots img{width:100%;image-rendering:pixelated;border:3px solid #000}
+label{display:block;margin:16px 0 8px}
+input[type=text],textarea{width:100%;font:inherit;font-size:var(--b);color:#fff;background:#000;padding:8px 12px;border:3px solid #6d6d6d}
+textarea{min-height:96px;resize:vertical}
+input[type=text]:focus,textarea:focus{outline:3px solid var(--gold)}
+input[type=file]{width:100%;font:inherit;font-size:var(--t);color:#cfc8bf;background:#000;padding:8px;border:3px solid #6d6d6d}
+.hint{font-size:var(--t);color:#bdb5ac;margin:0 0 8px}
+.msg{margin:16px 0 0;font-size:var(--b);overflow-wrap:anywhere}
+.msg.err{color:#ff5555}
+.msg.ok{color:#55ff55}
+#upload h3{font-size:var(--b);margin:24px 0 8px}
+#upload .btn{margin-top:16px}
 footer{margin-top:8px;font-size:var(--t);color:#cfc8bf;text-shadow:2px 2px 0 #000}
 @media (prefers-reduced-motion:reduce){.splash{animation:none}}
 </style>
@@ -83,6 +94,7 @@ footer{margin-top:8px;font-size:var(--t);color:#cfc8bf;text-shadow:2px 2px 0 #00
 
   <div class="row">
     <a class="btn" href="#skins">Browse packs</a>
+    <a class="btn" href="#/upload">Upload a pack</a>
     <a class="btn" href="https://discord.gg/atQA5ecyxj">Join the Discord</a>
     <a class="btn" id="login" href="/auth/login">Log in with Discord</a>
     <button class="btn" id="mute" type="button">Sound: On</button>
@@ -94,6 +106,7 @@ footer{margin-top:8px;font-size:var(--t);color:#cfc8bf;text-shadow:2px 2px 0 #00
     <div class="grid" id="grid"></div>
   </section>
   <section class="panel" id="detail" hidden></section>
+  <section class="panel" id="upload" hidden></section>
 
   <footer>Fan-made community site. Not affiliated with Mojang or Microsoft.</footer>
 </div>
@@ -185,21 +198,115 @@ function showPack(p){
     d.append(el('h3',{text:'Screenshots'}),g);
   }
 }
+
+/* ---------- UPLOAD FORM ----------
+   Sends the pack to /api/submit. Only people logged in with Discord can use it.
+   The limits below match the ones in src/index.js (the server checks them again). */
+const meP=fetch('/api/me').then(r=>r.json()).catch(()=>({loggedIn:false}));
+const PLATFORMS=[['xbox360','Xbox 360'],['ps3','PS3'],['wiiu','Wii U'],['vita','PS Vita'],['ps4','PS4'],['xboxone','Xbox One'],['switch','Switch']];
+const MAXB={icon:512*1024,shot:2*1024*1024,pack:5*1024*1024,total:20*1024*1024};
+const IMG_OK='image/png,image/jpeg,image/webp';
+function showUpload(){
+  const u=$('upload');u.textContent='';document.title='Upload a pack | Skin Central';
+  u.append(el('a',{class:'btn',href:'#skins',text:'Back to all packs'}),el('h2',{text:'Upload a pack'}));
+  meP.then(me=>{
+    if(!me.loggedIn){
+      u.append(el('p',{text:'Log in with Discord to upload a pack.'}),el('a',{class:'btn',href:'/auth/login',text:'Log in with Discord'}));
+      return;
+    }
+    const name=el('input',{type:'text',id:'f-name',maxlength:'40'});
+    const desc=el('textarea',{id:'f-desc',maxlength:'500'});
+    const tags=el('input',{type:'text',id:'f-tags',maxlength:'200',placeholder:'youtuber, funny, boys'});
+    const icon=el('input',{type:'file',id:'f-icon',accept:IMG_OK});
+    const shots=[1,2,3,4].map(i=>el('input',{type:'file',id:'f-shot'+i,accept:IMG_OK}));
+    const pf=PLATFORMS.map(([k,n])=>[k,n,el('input',{type:'file',id:'f-file-'+k})]);
+    const msg=el('p',{class:'msg',role:'status'});
+    const go=el('button',{class:'btn',type:'button',text:'Submit for review'});
+    const mine=el('div',{});
+    const fail=t=>{msg.className='msg err';msg.textContent=t};
+
+    u.append(
+      el('p',{class:'hint',text:'Only upload skins made by you or your community, not ripped official content. A moderator checks every pack before it appears.'}),
+      el('label',{for:'f-name',text:'Pack name'}),name,
+      el('label',{for:'f-desc',text:'Description (optional)'}),desc,
+      el('label',{for:'f-tags',text:'Tags, separated by commas (up to 5)'}),tags,
+      el('label',{for:'f-icon',text:'Icon (required)'}),
+      el('p',{class:'hint',text:'PNG, JPG or WebP, up to 512 KB.'}),icon,
+      el('h3',{text:'Screenshots (optional)'}),
+      el('p',{class:'hint',text:'Up to 4 images. PNG, JPG or WebP, up to 2 MB each.'}),...shots,
+      el('h3',{text:'Pack files'}),
+      el('p',{class:'hint',text:'Add a file for each platform you have. At least one is required, up to 5 MB each.'}));
+    pf.forEach(([k,n,input])=>u.append(el('label',{for:'f-file-'+k,text:n}),input));
+    u.append(go,msg,mine);
+
+    function loadMine(){
+      fetch('/api/my').then(r=>r.json()).then(list=>{
+        mine.textContent='';
+        if(!Array.isArray(list)||!list.length)return;
+        mine.append(el('h3',{text:'Your submissions'}));
+        list.forEach(p=>mine.appendChild(el('p',{class:'by',text:p.name+': '+p.status+(p.deny_reason?' ('+p.deny_reason+')':'')})));
+      }).catch(()=>{});
+    }
+    loadMine();
+
+    go.addEventListener('click',async()=>{
+      msg.className='msg';msg.textContent='';
+      const nm=name.value.trim();
+      if(nm.length<3)return fail('Pack name must be at least 3 characters.');
+      const ic=icon.files[0];
+      if(!ic)return fail('Please add an icon image.');
+      if(ic.size>MAXB.icon)return fail('The icon is too big (max 512 KB).');
+      const fd=new FormData();
+      fd.append('name',nm);fd.append('description',desc.value);fd.append('tags',tags.value);fd.append('icon',ic);
+      let total=ic.size,count=0;
+      for(let i=0;i<4;i++){
+        const f=shots[i].files[0];if(!f)continue;
+        if(f.size>MAXB.shot)return fail('Screenshot '+(i+1)+' is too big (max 2 MB).');
+        fd.append('shot'+(i+1),f);total+=f.size;
+      }
+      for(const [k,n,input] of pf){
+        const f=input.files[0];if(!f)continue;
+        if(f.size>MAXB.pack)return fail('The '+n+' file is too big (max 5 MB).');
+        fd.append('file_'+k,f);total+=f.size;count++;
+      }
+      if(!count)return fail('Please add at least one pack file.');
+      if(total>MAXB.total)return fail('That upload is too big overall (max 20 MB).');
+      go.disabled=true;msg.textContent='Uploading... please wait.';
+      try{
+        const r=await fetch('/api/submit',{method:'POST',body:fd});
+        const d=await r.json().catch(()=>({}));
+        if(r.ok&&d.ok){
+          msg.className='msg ok';msg.textContent=d.message;
+          name.value='';desc.value='';tags.value='';icon.value='';
+          shots.forEach(i=>{i.value=''});pf.forEach(x=>{x[2].value=''});
+          loadMine();
+        }else fail(d.error||'Upload failed. Please try again.');
+      }catch{fail('Upload failed. Check your connection and try again.')}
+      go.disabled=false;
+    });
+  });
+}
+
 function route(){
-  const m=location.hash.match(/^#\/pack\/(.+)$/);
+  const h=location.hash;
+  const m=h.match(/^#\/pack\/(.+)$/);
   const p=m&&packs.find(x=>x.slug===decodeURIComponent(m[1]));
-  $('skins').hidden=!!p;$('detail').hidden=!p;
-  p?showPack(p):renderList($('q').value);
+  const up=h==='#/upload';
+  $('skins').hidden=!!p||up;$('detail').hidden=!p;$('upload').hidden=!up;
+  up?showUpload():p?showPack(p):renderList($('q').value);
   window.scrollTo(0,0);
 }
 $('q').addEventListener('input',e=>renderList(e.target.value));
 window.addEventListener('hashchange',route);
-fetch('packs.json').then(r=>r.json()).then(d=>{packs=d;route()})
+Promise.all([
+  fetch('packs.json').then(r=>r.json()),
+  fetch('/api/packs').then(r=>r.ok?r.json():[]).catch(()=>[])
+]).then(([a,b])=>{packs=a.concat(b);route()})
   .catch(()=>{$('grid').textContent="Couldn't load the pack list. If you opened this file directly, try the live site instead."});
 
 /* ---------- DISCORD LOGIN ----------
    Asks the Worker who is logged in. If someone is, the button becomes a log out button. */
-fetch('/api/me').then(r=>r.json()).then(me=>{
+meP.then(me=>{
   if(!me.loggedIn)return;
   const b=$('login');
   b.textContent='Log out ('+me.user.name+(me.isMod?', Mod':'')+')';
