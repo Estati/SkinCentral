@@ -580,8 +580,25 @@ function showTutorials(){
   t.append(g);
 }
 
+/* A small "are you sure?" popup. onYes() runs only if they press the yes button. */
+function askConfirm(title,text,yesText,onYes){
+  const esc=e=>{if(e.key==='Escape')close()};
+  const close=()=>{ov.remove();document.removeEventListener('keydown',esc)};
+  const yes=el('button',{class:'btn',type:'button',text:yesText});
+  const no=el('button',{class:'btn',type:'button',text:'Cancel'});
+  const ov=el('div',{class:'modal'},
+    el('div',{class:'panel',role:'dialog','aria-modal':'true'},
+      el('h2',{text:title}),el('p',{text}),el('div',{class:'dl'},yes,no)));
+  yes.addEventListener('click',()=>{close();onYes()});
+  no.addEventListener('click',close);
+  ov.addEventListener('click',e=>{if(e.target===ov)close()});
+  document.addEventListener('keydown',esc);
+  document.body.append(ov);
+  no.focus();
+}
+
 /* ---------- ACCOUNT PAGE (#/account) ----------
-   Shows the logged-in person's own packs and what state each one is in. */
+   Shows the logged-in person's own packs, what state each one is in, and a Delete button. */
 function showAccount(){
   const a=$('account');a.textContent='';document.title='My account | Skin Central';
   a.append(el('a',{class:'btn',href:'#skins',text:'Back to all packs'}),el('h2',{text:'My account'}));
@@ -591,18 +608,41 @@ function showAccount(){
       return;
     }
     const list=el('div',{text:'Loading...'});
+    const msg=el('p',{class:'msg',role:'status'});
     a.append(
       el('p',{class:'hint',text:'Logged in as '+me.user.name+(me.isMod?' (moderator)':'')+'.'}),
       el('a',{class:'btn',href:'#/upload',text:'Upload a pack'}),
-      el('h3',{text:'My packs'}),list);
-    fetch('/api/my',{cache:'no-store'}).then(r=>r.ok?r.json():Promise.reject()).then(items=>{
-      list.textContent='';
-      if(!items.length){list.appendChild(el('p',{class:'empty',text:'You have not uploaded any packs yet.'}));return}
-      items.forEach(p=>list.appendChild(el('div',{class:'card admin'},
-        el('h3',{text:p.name}),
-        el('p',{class:'by',text:'Status: '+p.status[0].toUpperCase()+p.status.slice(1)+'. Uploaded '+new Date(p.created_at*1000).toLocaleDateString()+'.'}),
-        p.deny_reason?el('p',{class:'by',text:'Reason: '+p.deny_reason}):null)));
-    }).catch(()=>{list.textContent='Could not load your packs.'});
+      el('h3',{text:'My packs'}),msg,list);
+
+    async function remove(p){
+      msg.className='msg';msg.textContent='Deleting...';
+      try{
+        const r=await fetch('/api/my/delete',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({id:p.id})});
+        const d=await r.json().catch(()=>({}));
+        if(r.ok&&d.ok){
+          packs=packs.filter(x=>x.id!==p.id);   // so it also disappears from the gallery
+          msg.className='msg ok';msg.textContent='Deleted "'+p.name+'".';load();
+        }else{msg.className='msg err';msg.textContent=d.error||'That did not work.'}
+      }catch{msg.className='msg err';msg.textContent='Network problem. Try again.'}
+    }
+    function load(){
+      fetch('/api/my',{cache:'no-store'}).then(r=>r.ok?r.json():Promise.reject()).then(items=>{
+        list.textContent='';
+        if(!items.length){list.appendChild(el('p',{class:'empty',text:'You have not uploaded any packs yet.'}));return}
+        items.forEach(p=>{
+          const del=el('button',{class:'btn',type:'button',text:'Delete'});
+          del.addEventListener('click',()=>askConfirm('Delete this pack?',
+            '"'+p.name+'" and all of its files will be deleted for good. This cannot be undone.',
+            'Yes, delete it',()=>remove(p)));
+          list.appendChild(el('div',{class:'card admin'},
+            el('h3',{text:p.name}),
+            el('p',{class:'by',text:'Status: '+p.status[0].toUpperCase()+p.status.slice(1)+'. Uploaded '+new Date(p.created_at*1000).toLocaleDateString()+'.'}),
+            p.deny_reason?el('p',{class:'by',text:'Reason: '+p.deny_reason}):null,
+            el('div',{class:'dl'},del)));
+        });
+      }).catch(()=>{list.textContent='Could not load your packs.'});
+    }
+    load();
   });
 }
 
