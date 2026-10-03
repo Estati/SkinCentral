@@ -264,34 +264,40 @@ async function myPacks(request, env) {
   const s = await readSession(env, request);
   if (!s) return json({ error: "Please log in with Discord first." }, 401);
   const { results } = await env.DB.prepare(
-    "SELECT id, name, description, tags, status, deny_reason, created_at FROM packs WHERE creator_id = ? ORDER BY created_at DESC LIMIT 50"
+    "SELECT id, name, description, tags, images, files, status, deny_reason, created_at FROM packs WHERE creator_id = ? ORDER BY created_at DESC LIMIT 50"
   ).bind(s.id).all();
   return json(results.map((r) => {
-    let tags = [];
+    let tags = [], images = [], files = [];
     try { tags = JSON.parse(r.tags || "[]"); } catch {}
-    return { ...r, tags };
+    try { images = JSON.parse(r.images || "[]"); } catch {}
+    try { files = JSON.parse(r.files || "[]"); } catch {}
+    return { ...r, tags, images, files };
   }));
 }
 
-// A logged-in person edits the text of one of their OWN packs (name, description, tags).
-// Approved and pending packs keep their status. A denied pack goes back to Pending for another review.
+// A logged-in person edits one of their OWN packs.
+// - Text only (name, description, tags): approved packs stay live.
+// - Changing the icon, a screenshot or a pack file: an approved pack goes back to Pending.
+// - A denied pack always goes back to Pending.
 async function editMine(request, env, ctx) {
   const s = await readSession(env, request);
   if (!s) return json({ error: "Please log in with Discord first." }, 401);
   if (!sameOrigin(request, env)) return json({ error: "Bad origin." }, 403);
-  let body;
+  const len = Number(request.headers.get("Content-Length") || 0);
+  if (len > LIMITS.total + 1024 * 1024) return json({ error: "That upload is too big." }, 413);
+  let form;
   try {
-    body = await request.json();
+    form = await request.formData();
   } catch {
     return json({ error: "Bad request." }, 400);
   }
-  const id = String(body.id || "");
+  const id = String(form.get("id") || "");
   if (!/^[a-f0-9]{12}$/.test(id)) return json({ error: "Bad pack id." }, 400);
-  const name = clean(body.name, 40);
-  const description = clean(body.description, 500);
+  const name = clean(form.get("name"), 40);
+  const description = clean(form.get("description"), 500);
   if (name.length < 3) return json({ error: "Pack name must be at least 3 characters." }, 400);
   const tags = [];
-  for (const t of clean(body.tags, 200).split(",")) {
+  for (const t of clean(form.get("tags"), 200).split(",")) {
     const tag = clean(t, 20);
     if (tag && !tags.some((x) => x.toLowerCase() === tag.toLowerCase())) tags.push(tag);
   }
@@ -299,12 +305,102 @@ async function editMine(request, env, ctx) {
 
   // Only packs made by this exact Discord account can be edited here.
   const row = await env.DB.prepare(
-    "SELECT id, status FROM packs WHERE id = ? AND creator_id = ?"
+    "SELECT id, status, images, files FROM packs WHERE id = ? AND creator_id = ?"
   ).bind(id, s.id).first();
   if (!row) return json({ error: "Pack not found." }, 404);
 
+  let newImages = [], newFiles = [];
+  try { newImages = JSON.parse(row.images || "[]"); } catch {}
+  try { newFiles = JSON.parse(row.files || "[]"); } catch {}
+
+  // What is stored in R2 for this pack right now (key -> size), used to check the total size.
+  const sizes = new Map();
+  let cursor;
+  do {
+    const page = await env.FILES.list({ prefix: id + "/", cursor });
+    for (const o of page.objects) sizes.set(o.key, o.size);
+    cursor = page.truncated ? page.cursor : undefined;
+  } while (cursor);
+  const existing = new Set(sizes.keys());
+
+  const puts = [];     // new files to store
+  const removes = [];  // old files to delete once everything worked
+  let mediaChanged = false;
+
+  const icon = form.get("icon");
+  if (isFile(icon)) {
+    if (icon.size > LIMITS.icon) return json({ error: "The icon is too big (max 512 KB)." }, 400);
+    const type = await sniffImage(icon);
+    if (!type) return json({ error: "The icon must be a PNG, JPG or WebP image." }, 400);
+    puts.push({ key: `${id}/icon`, file: icon, type });
+    sizes.set(`${id}/icon`, icon.size);
+    mediaChanged = true;
+  }
+
+  for (let i = 1; i <= 4; i++) {
+    const n = "shot" + i;
+    const key = `${id}/${n}`;
+    const f = form.get(n);
+    if (isFile(f)) {
+      if (f.size > LIMITS.shot) return json({ error: `Screenshot ${i} is too big (max 2 MB).` }, 400);
+      const type = await sniffImage(f);
+      if (!type) return json({ error: `Screenshot ${i} must be a PNG, JPG or WebP image.` }, 400);
+      puts.push({ key, file: f, type });
+      sizes.set(key, f.size);
+      if (!newImages.includes(n)) newImages.push(n);
+      mediaChanged = true;
+    } else if (form.get("remove_" + n) === "1" && newImages.includes(n)) {
+      newImages = newImages.filter((x) => x !== n);
+      removes.push(key);
+      sizes.delete(key);
+      mediaChanged = true;
+    }
+  }
+  newImages.sort();
+
+  for (const pkey of Object.keys(PLATFORMS)) {
+    const f = form.get("file_" + pkey);
+    const old = newFiles.find((x) => x.pkey === pkey);
+    if (isFile(f)) {
+      if (f.size > LIMITS.pack) {
+        return json({ error: `The ${PLATFORMS[pkey]} file is too big (max 5 MB).` }, 400);
+      }
+      const filename = safeName(f.name);
+      if (BLOCKED_EXT.test(filename)) {
+        return json({ error: `The ${PLATFORMS[pkey]} file type isn't allowed.` }, 400);
+      }
+      const key = `${id}/${pkey}/${filename}`;
+      if (old) {
+        const oldKey = `${id}/${pkey}/${old.filename}`;
+        if (oldKey !== key) {
+          removes.push(oldKey);
+          sizes.delete(oldKey);
+        }
+        newFiles = newFiles.filter((x) => x.pkey !== pkey);
+      }
+      puts.push({ key, file: f, type: "application/octet-stream" });
+      sizes.set(key, f.size);
+      newFiles.push({ platform: PLATFORMS[pkey], pkey, filename, size: f.size });
+      mediaChanged = true;
+    } else if (form.get("remove_file_" + pkey) === "1" && old) {
+      const oldKey = `${id}/${pkey}/${old.filename}`;
+      removes.push(oldKey);
+      sizes.delete(oldKey);
+      newFiles = newFiles.filter((x) => x.pkey !== pkey);
+      mediaChanged = true;
+    }
+  }
+  if (!newFiles.length) return json({ error: "A pack needs at least one pack file." }, 400);
+
+  let total = 0;
+  for (const v of sizes.values()) total += v;
+  if (total > LIMITS.total) {
+    return json({ error: `That pack would be too big overall (max ${Math.round(LIMITS.total / 1048576)} MB).` }, 400);
+  }
+
   const wasDenied = row.status === "denied";
-  if (wasDenied) {
+  const backToPending = row.status !== "pending" && (wasDenied || mediaChanged);
+  if (backToPending) {
     const pending = await env.DB.prepare(
       "SELECT COUNT(*) AS n FROM packs WHERE creator_id = ? AND status = 'pending'"
     ).bind(s.id).first();
@@ -313,38 +409,56 @@ async function editMine(request, env, ctx) {
         error: `You already have ${LIMITS.maxPending} packs waiting for review. Please wait for a moderator.`,
       }, 429);
     }
+    // Pull the pack off the site BEFORE any new file is stored, so unreviewed files are never public.
     await env.DB.prepare(
-      `UPDATE packs SET name = ?, description = ?, tags = ?, status = 'pending',
-       deny_reason = NULL, reviewed_by = NULL, reviewed_at = NULL
+      `UPDATE packs SET status = 'pending', deny_reason = NULL, reviewed_by = NULL, reviewed_at = NULL
        WHERE id = ? AND creator_id = ?`
-    ).bind(name, description, JSON.stringify(tags), id, s.id).run();
-  } else {
-    await env.DB.prepare(
-      "UPDATE packs SET name = ?, description = ?, tags = ? WHERE id = ? AND creator_id = ?"
-    ).bind(name, description, JSON.stringify(tags), id, s.id).run();
+    ).bind(id, s.id).run();
   }
 
-  if (wasDenied && env.MOD_WEBHOOK_URL) {
+  const done = [];
+  try {
+    for (const u of puts) {
+      await env.FILES.put(u.key, await u.file.arrayBuffer(), {
+        httpMetadata: { contentType: u.type },
+      });
+      done.push(u.key);
+    }
+    await env.DB.prepare(
+      "UPDATE packs SET name = ?, description = ?, tags = ?, images = ?, files = ? WHERE id = ? AND creator_id = ?"
+    ).bind(
+      name, description, JSON.stringify(tags), JSON.stringify(newImages), JSON.stringify(newFiles), id, s.id
+    ).run();
+  } catch (e) {
+    await Promise.allSettled(done.filter((k) => !existing.has(k)).map((k) => env.FILES.delete(k)));
+    return json({ error: "Saving failed. Please try again." }, 500);
+  }
+  if (removes.length) await Promise.allSettled(removes.map((k) => env.FILES.delete(k)));
+
+  if (backToPending && env.MOD_WEBHOOK_URL) {
     ctx.waitUntil(
       fetch(env.MOD_WEBHOOK_URL, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          content: `<@&${env.MOD_ROLE_ID}> A denied pack was edited and is waiting for review again.`,
+          content: `<@&${env.MOD_ROLE_ID}> ${wasDenied ? "A denied pack was edited" : "A pack's icon, screenshots or files were changed"} and it is waiting for review again.`,
           allowed_mentions: { roles: [env.MOD_ROLE_ID] },
           embeds: [{
             title: name,
             description: description.slice(0, 300) || "(no description)",
             url: env.SITE_URL + "/#/admin",
             color: 0x8f8f8f,
-            fields: [{ name: "By", value: clean(s.name, 60) || "unknown" }],
+            fields: [
+              { name: "By", value: clean(s.name, 60) || "unknown" },
+              { name: "Platforms", value: newFiles.map((f) => f.platform).join(", ") },
+            ],
           }],
         }),
       }).catch(() => {})
     );
   }
 
-  return json({ ok: true, name, description, tags, status: wasDenied ? "pending" : row.status });
+  return json({ ok: true, name, description, tags, status: backToPending ? "pending" : row.status });
 }
 
 // A logged-in person deletes one of their OWN packs: the files in R2 first, then the database row.
