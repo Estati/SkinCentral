@@ -46,8 +46,8 @@ h1{margin:16px 0 52px;position:relative;display:block;max-width:720px}
 .btn:hover,.btn:focus-visible{color:var(--gold);outline-color:#fff;background:#7c86b8}
 .btn:active{border-color:var(--btn-lo) var(--btn-hi) var(--btn-hi) var(--btn-lo)}
 
-.panel{background:var(--panel);border:4px solid;border-color:#5b5149 #14110f #14110f #5b5149;outline:3px solid #000;padding:var(--pad);margin-bottom:24px}
-.panel h2{font-weight:700;font-size:var(--h);margin:0 0 16px;text-shadow:var(--sh) var(--sh) 0 #000}
+.panel{background:#c6c6c6;color:#404040;border:4px solid;border-color:#fff #555 #555 #fff;outline:3px solid #000;padding:var(--pad);margin-bottom:24px}
+.panel h2{font-weight:700;font-size:var(--h);margin:0 0 16px;text-align:center;color:#404040}
 input[type=search]{width:100%;font:inherit;font-size:var(--b);color:#fff;background:#000;padding:8px 12px;border:3px solid #6d6d6d;margin-bottom:20px}
 input[type=search]:focus{outline:3px solid var(--gold)}
 
@@ -94,6 +94,21 @@ input[type=file]{width:100%;font:inherit;font-size:var(--t);color:#cfc8bf;backgr
 .reportbox{margin-top:32px}
 .reportbox form,.reportbox div{margin-top:12px}
 .reportbox .btn{margin-top:8px}
+/* light dialog look inside panels */
+.panel .hint,.panel .by,.panel .tags,.panel .empty,.panel .card small{color:#555}
+.panel .msg.err{color:#a00000}
+.panel .msg.ok{color:#006600}
+.panel .card{background:#b4b4b4;border-color:#555 #fff #fff #555}
+.panel .card:hover{border-color:#5b5fa0}
+.panel .card .name{color:#202020}
+.panel .card .name:hover{color:#4a4ea0}
+.callout{background:#a0a4d8;color:var(--gold);text-shadow:var(--sh) var(--sh) 0 #3f3f00;text-align:center;border:3px solid;border-color:#c8cbf0 #3c3f78 #3c3f78 #c8cbf0;outline:3px solid #000;padding:12px;margin:16px 0}
+/* rules + tutorials pages */
+.doc h2 ~ h2{margin-top:32px}
+.doc h3{font-size:var(--b);margin:20px 0 8px}
+.doc p{max-width:60ch;margin:0 0 8px}
+.doc .callout{max-width:none}
+footer a{color:var(--gold)}
 footer{margin-top:8px;font-size:var(--t);color:#cfc8bf;text-shadow:2px 2px 0 #000}
 @media (prefers-reduced-motion:reduce){.splash{animation:none}}
 </style>
@@ -106,6 +121,8 @@ footer{margin-top:8px;font-size:var(--t);color:#cfc8bf;text-shadow:2px 2px 0 #00
   <div class="row">
     <a class="btn" href="#skins">Browse packs</a>
     <a class="btn" href="#/upload">Upload a pack</a>
+    <a class="btn" href="#/tutorials">Tutorials</a>
+    <a class="btn" href="#/rules">Rules</a>
     <a class="btn" href="https://discord.gg/atQA5ecyxj">Join the Discord</a>
     <a class="btn" id="login" href="/auth/login">Log in with Discord</a>
     <button class="btn" id="mute" type="button">Sound: On</button>
@@ -120,8 +137,10 @@ footer{margin-top:8px;font-size:var(--t);color:#cfc8bf;text-shadow:2px 2px 0 #00
   <section class="panel" id="detail" hidden></section>
   <section class="panel" id="upload" hidden></section>
   <section class="panel" id="admin" hidden></section>
+  <section class="panel doc" id="rules" hidden></section>
+  <section class="panel doc" id="tutorials" hidden></section>
 
-  <footer>Fan-made community site. Not affiliated with Mojang or Microsoft.</footer>
+  <footer>Fan-made community site. Not affiliated with Mojang or Microsoft. <a href="#/rules">Rules</a></footer>
 </div>
 
 <script>
@@ -201,7 +220,7 @@ function reportBox(p){
   const box=el('div',{class:'reportbox'});
   const toggle=el('button',{class:'btn',type:'button',text:'Report this pack'});
   const form=el('div',{hidden:''});
-  const why=el('textarea',{maxlength:'300',placeholder:'What is wrong? (stolen or ripped content, unsafe file, something else)','aria-label':'Why are you reporting this pack?'});
+  const why=el('textarea',{maxlength:'300',placeholder:'What is wrong? (stolen or ripped content, NSFW content, unsafe file, something else)','aria-label':'Why are you reporting this pack?'});
   const send=el('button',{class:'btn',type:'button',text:'Send report'});
   const msg=el('p',{class:'msg',role:'status'});
   form.append(el('p',{class:'hint',text:'Reports go to the moderators. You need to be logged in with Discord.'}),why,send,msg);
@@ -289,7 +308,8 @@ function showUpload(){
     const fail=t=>{msg.className='msg err';msg.textContent=t};
 
     u.append(
-      el('p',{class:'hint',text:'Only upload skins made by you or your community, not ripped official content. A moderator checks every pack before it appears.'}),
+      el('p',{class:'hint',text:'Only upload skins made by you or your community, not ripped official content, and no NSFW content. A moderator checks every pack before it appears.'}),
+      el('a',{class:'btn',href:'#/rules',text:'Read the rules first'}),
       el('label',{for:'f-name',text:'Pack name'}),name,
       el('label',{for:'f-desc',text:'Description (optional)'}),desc,
       el('label',{for:'f-tags',text:'Tags, separated by commas (up to 5)'}),tags,
@@ -438,13 +458,57 @@ function showAdmin(){
   });
 }
 
+/* ---------- RULES PAGE (#/rules) ----------
+   Edit the text in this list to change the rules. Each line is [title, explanation]. */
+const RULES=[
+  ['Only upload your own work','Skins and packs must be made by you, or by someone who gave you permission. Give credit to the creators.'],
+  ['No ripped or leaked official content','No official DLC, paid packs, or files taken from Mojang, Microsoft or other companies.'],
+  ['No NSFW content','No nudity, sexual or fetish content, or graphic gore in skins, icons, screenshots, names or descriptions. This includes anything suggestive, because lots of members are young.'],
+  ['No harmful files','Packs only. Programs, scripts and web pages are blocked, and moderators may open any file to check it.'],
+  ['Keep it friendly','No hateful or harassing content, and nothing made to mock or target real people.'],
+  ['No spam or re-uploads',"Don't upload the same pack twice, and never upload someone else's pack as your own."],
+  ['Honest names and descriptions','Say what the pack really is.'],
+  ['Moderators have the final say','Every pack is checked before it appears, and packs can be denied or taken down at any time.']
+];
+function showRules(){
+  const r=$('rules');r.textContent='';document.title='Rules | Skin Central';
+  r.append(el('a',{class:'btn',href:'#skins',text:'Back to all packs'}),el('h2',{text:'Rules'}),
+    el('p',{class:'callout',text:'Every pack is checked by a moderator before it appears.'}));
+  RULES.forEach((x,i)=>r.append(el('h3',{text:(i+1)+'. '+x[0]}),el('p',{text:x[1]})));
+  r.append(el('h2',{text:'Reports and takedowns'}),
+    el('h3',{text:'To report a pack'}),
+    el('p',{text:'Open the pack, press "Report this pack", log in with Discord and tell us what is wrong. You can send up to 5 reports a day.'}),
+    el('h3',{text:'What happens next'}),
+    el('p',{text:'Moderators look at the report, then either take the pack down or close the report.'}),
+    el('h3',{text:'Creators'}),
+    el('p',{text:'If you made a pack (or own something in it) and want it removed, report it with the reason, or message the moderators in our Discord server. Taken-down packs disappear from the site within a few minutes.'}),
+    el('h3',{text:'Mistakes'}),
+    el('p',{text:'If your pack was denied or taken down and you think that is wrong, ask the moderators in the Discord. The reason is shown in "Your submissions".'}),
+    el('a',{class:'btn',href:'https://discord.gg/atQA5ecyxj',text:'Join the Discord'}));
+}
+
+/* ---------- TUTORIALS PAGE (#/tutorials) ----------
+   Each line is [button text, link]. Change the button text to the video's real title. */
+const TUTORIALS=[
+  ['Tutorial 1','https://youtu.be/Gf2yTgNn7P8'],
+  ['Tutorial 2','https://www.youtube.com/watch?v=AakdZGOzMoY']
+];
+function showTutorials(){
+  const t=$('tutorials');t.textContent='';document.title='Tutorials | Skin Central';
+  t.append(el('a',{class:'btn',href:'#skins',text:'Back to all packs'}),el('h2',{text:'Tutorials'}),
+    el('p',{class:'hint',text:'Video guides on YouTube. They open in a new tab.'}));
+  const g=el('div',{class:'dl'});
+  TUTORIALS.forEach(x=>g.append(el('a',{class:'btn',href:x[1],target:'_blank',rel:'noopener noreferrer',text:x[0]})));
+  t.append(g);
+}
+
 function route(){
   const h=location.hash;
   const m=h.match(/^#\/pack\/(.+)$/);
   const p=m&&packs.find(x=>x.slug===decodeURIComponent(m[1]));
-  const up=h==='#/upload',ad=h==='#/admin';
-  $('skins').hidden=!!p||up||ad;$('detail').hidden=!p;$('upload').hidden=!up;$('admin').hidden=!ad;
-  ad?showAdmin():up?showUpload():p?showPack(p):renderList($('q').value);
+  const up=h==='#/upload',ad=h==='#/admin',ru=h==='#/rules',tu=h==='#/tutorials';
+  $('skins').hidden=!!p||up||ad||ru||tu;$('detail').hidden=!p;$('upload').hidden=!up;$('admin').hidden=!ad;$('rules').hidden=!ru;$('tutorials').hidden=!tu;
+  ad?showAdmin():up?showUpload():ru?showRules():tu?showTutorials():p?showPack(p):renderList($('q').value);
   window.scrollTo(0,0);
 }
 $('q').addEventListener('input',e=>renderList(e.target.value));
