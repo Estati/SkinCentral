@@ -1,5 +1,23 @@
 {
   "name": "skincentral",
+  "main": "src/index.js",
   "compatibility_date": "2026-10-01",
-  "assets": { "directory": "./" }
+  "assets": {
+    "directory": "./",
+    "binding": "ASSETS",
+    "run_worker_first": ["/api/*", "/auth/*", "/admin/*"]
+  },
+  "d1_databases": [
+    {
+      "binding": "DB",
+      "database_name": "skincentral-db",
+      "database_id": "0ea055f6-9e3d-4213-bb43-6a1127404614"
+    }
+  ],
+  "r2_buckets": [
+    {
+      "binding": "FILES",
+      "bucket_name": "skincentral-files"
+    }
+  ]
 }
