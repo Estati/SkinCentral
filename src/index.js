@@ -269,6 +269,35 @@ async function myPacks(request, env) {
   return json(results);
 }
 
+// A logged-in person deletes one of their OWN packs: the files in R2 first, then the database row.
+async function deleteMine(request, env) {
+  const s = await readSession(env, request);
+  if (!s) return json({ error: "Please log in with Discord first." }, 401);
+  if (!sameOrigin(request, env)) return json({ error: "Bad origin." }, 403);
+  let body;
+  try {
+    body = await request.json();
+  } catch {
+    return json({ error: "Bad request." }, 400);
+  }
+  const id = String(body.id || "");
+  if (!/^[a-f0-9]{12}$/.test(id)) return json({ error: "Bad pack id." }, 400);
+  // Only packs made by this exact Discord account can be deleted here.
+  const row = await env.DB.prepare(
+    "SELECT id FROM packs WHERE id = ? AND creator_id = ?"
+  ).bind(id, s.id).first();
+  if (!row) return json({ error: "Pack not found." }, 404);
+  // Every file of a pack lives under "<id>/" in R2 (icon, screenshots, pack files).
+  let cursor;
+  do {
+    const page = await env.FILES.list({ prefix: id + "/", cursor });
+    if (page.objects.length) await env.FILES.delete(page.objects.map((o) => o.key));
+    cursor = page.truncated ? page.cursor : undefined;
+  } while (cursor);
+  await env.DB.prepare("DELETE FROM packs WHERE id = ? AND creator_id = ?").bind(id, s.id).run();
+  return json({ ok: true });
+}
+
 // Asks Cloudflare Turnstile whether the visitor passed the human check.
 async function checkHuman(request, env) {
   if (!env.TURNSTILE_SECRET) return false;
@@ -718,6 +747,7 @@ async function route(request, env, ctx) {
   if (p === "/api/me") return me(request, env);
   if (p === "/api/packs" && m === "GET") return listPacks(env);
   if (p === "/api/my" && m === "GET") return myPacks(request, env);
+  if (p === "/api/my/delete" && m === "POST") return deleteMine(request, env);
   if (p === "/api/submit" && m === "POST") return submit(request, env, ctx);
   if (p === "/api/admin/list" && m === "GET") return adminList(request, env, url);
   if (p === "/api/admin/review" && m === "POST") return review(request, env);
