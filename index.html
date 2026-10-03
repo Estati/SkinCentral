@@ -83,6 +83,9 @@ input[type=file]{width:100%;font:inherit;font-size:var(--t);color:#cfc8bf;backgr
 .msg.ok{color:#55ff55}
 #upload h3{font-size:var(--b);margin:24px 0 8px}
 #upload .btn{margin-top:16px}
+.card.admin{align-items:stretch;text-align:left;margin-bottom:16px}
+.card.admin h3{margin:0 0 8px}
+.card.admin input[type=text]{margin:8px 0}
 footer{margin-top:8px;font-size:var(--t);color:#cfc8bf;text-shadow:2px 2px 0 #000}
 @media (prefers-reduced-motion:reduce){.splash{animation:none}}
 </style>
@@ -107,6 +110,7 @@ footer{margin-top:8px;font-size:var(--t);color:#cfc8bf;text-shadow:2px 2px 0 #00
   </section>
   <section class="panel" id="detail" hidden></section>
   <section class="panel" id="upload" hidden></section>
+  <section class="panel" id="admin" hidden></section>
 
   <footer>Fan-made community site. Not affiliated with Mojang or Microsoft.</footer>
 </div>
@@ -287,13 +291,77 @@ function showUpload(){
   });
 }
 
+/* ---------- MODERATION PAGE (#/admin) ----------
+   Only people with the Asset Moderation role can use it. The Worker checks the role on every
+   request, so even if someone opens this page they cannot load or change anything. */
+function adminCard(p,act){
+  const reason=el('input',{type:'text',maxlength:'200',placeholder:'Reason (optional, shown to the uploader)','aria-label':'Reason'});
+  const btns=el('div',{class:'dl'});
+  const mk=(t,fn)=>{const b=el('button',{class:'btn',type:'button',text:t});b.addEventListener('click',fn);btns.append(b)};
+  if(p.status!=='approved')mk('Approve',()=>act(p.id,'approve'));
+  if(p.status!=='denied')mk(p.status==='approved'?'Take down':'Deny',()=>act(p.id,'deny',reason.value));
+  const files=el('div',{class:'dl'});
+  p.files.forEach(f=>files.append(el('a',{class:'btn',href:f.href,download:'',text:f.platform+' ('+f.size+')'})));
+  const shots=el('div',{class:'shots'});
+  p.images.forEach(src=>shots.append(el('img',{src,alt:'screenshot',loading:'lazy'})));
+  return el('div',{class:'card admin'},
+    el('div',{class:'head'},icon(p),el('div',{},
+      el('h3',{text:p.name}),
+      el('p',{class:'by',text:'By '+p.creator+' (Discord ID '+p.creatorId+'), '+p.date}),
+      el('p',{class:'tags',text:p.tags.join(', ')}))),
+    el('p',{class:'desc',text:p.description||'(no description)'}),
+    p.denyReason?el('p',{class:'by',text:'Denied: '+p.denyReason}):null,
+    shots.children.length?shots:null,
+    el('h3',{text:'Files'}),files,reason,btns);
+}
+function showAdmin(){
+  const a=$('admin');a.textContent='';document.title='Moderation | Skin Central';
+  a.append(el('a',{class:'btn',href:'#skins',text:'Back to all packs'}),el('h2',{text:'Moderation'}));
+  meP.then(me=>{
+    if(!me.loggedIn||!me.isMod){
+      a.append(el('p',{text:me.loggedIn?'Moderators only.':'Log in with a moderator account.'}));
+      if(!me.loggedIn)a.append(el('a',{class:'btn',href:'/auth/login',text:'Log in with Discord'}));
+      return;
+    }
+    const tabs=el('div',{class:'row'});
+    const list=el('div',{});
+    const msg=el('p',{class:'msg',role:'status'});
+    a.append(tabs,msg,list);
+    let current='pending';
+    async function act(id,action,reason){
+      msg.className='msg';msg.textContent='Working...';
+      try{
+        const r=await fetch('/api/admin/review',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({id,action,reason})});
+        const d=await r.json().catch(()=>({}));
+        if(r.ok&&d.ok){msg.className='msg ok';msg.textContent='Done: '+d.status+'.';load(current)}
+        else{msg.className='msg err';msg.textContent=d.error||'That did not work.'}
+      }catch{msg.className='msg err';msg.textContent='Network problem. Try again.'}
+    }
+    async function load(st){
+      current=st;list.textContent='Loading...';
+      let items;
+      try{const r=await fetch('/api/admin/list?status='+st);items=await r.json();if(!r.ok)throw 0}
+      catch{list.textContent='Could not load packs.';return}
+      list.textContent='';
+      if(!items.length){list.appendChild(el('p',{class:'empty',text:'Nothing here.'}));return}
+      items.forEach(p=>list.appendChild(adminCard(p,act)));
+    }
+    ['pending','approved','denied'].forEach(st=>{
+      const b=el('button',{class:'btn',type:'button',text:st[0].toUpperCase()+st.slice(1)});
+      b.addEventListener('click',()=>{msg.textContent='';load(st)});
+      tabs.append(b);
+    });
+    load('pending');
+  });
+}
+
 function route(){
   const h=location.hash;
   const m=h.match(/^#\/pack\/(.+)$/);
   const p=m&&packs.find(x=>x.slug===decodeURIComponent(m[1]));
-  const up=h==='#/upload';
-  $('skins').hidden=!!p||up;$('detail').hidden=!p;$('upload').hidden=!up;
-  up?showUpload():p?showPack(p):renderList($('q').value);
+  const up=h==='#/upload',ad=h==='#/admin';
+  $('skins').hidden=!!p||up||ad;$('detail').hidden=!p;$('upload').hidden=!up;$('admin').hidden=!ad;
+  ad?showAdmin():up?showUpload():p?showPack(p):renderList($('q').value);
   window.scrollTo(0,0);
 }
 $('q').addEventListener('input',e=>renderList(e.target.value));
@@ -311,6 +379,7 @@ meP.then(me=>{
   const b=$('login');
   b.textContent='Log out ('+me.user.name+(me.isMod?', Mod':'')+')';
   b.setAttribute('href','/auth/logout');
+  if(me.isMod)b.insertAdjacentElement('afterend',el('a',{class:'btn',href:'#/admin',text:'Moderation'}));
 }).catch(()=>{});
 
 /* ---------- RANDOM SPLASH TEXT ----------
