@@ -109,6 +109,7 @@ input[type=file]{width:100%;font:inherit;font-size:var(--t);color:#cfc8bf;backgr
 .acct{display:flex;align-items:center;gap:12px;max-width:100%;background:#c6c6c6;color:#404040;text-decoration:none;font-size:var(--t);
   border:4px solid;border-color:#fff #555 #555 #fff;outline:3px solid #000;padding:8px 12px}
 .acct:hover,.acct:focus-visible{background:#a0a4d8;color:var(--gold);outline-color:#fff}
+.acct:active{border-color:#555 #fff #fff #555}
 .acct img,.acct .ph{width:32px;height:32px;flex:none;background:#222;border:3px solid #000}
 .acct img{image-rendering:auto}
 .acct .ph{display:flex;align-items:center;justify-content:center;color:#fff}
@@ -193,11 +194,11 @@ const sfx={
   done:()=>[523,659,784].forEach((f,i)=>setTimeout(()=>tone(f,.12,'triangle',.07),i*90))
 };
 document.addEventListener('pointerover',e=>{
-  const t=e.target.closest('.btn,.card');
+  const t=e.target.closest('.btn,.card,.acct');
   if(t&&!t.contains(e.relatedTarget))sfx.hover();
 });
 document.addEventListener('click',e=>{
-  const b=e.target.closest('.btn');
+  const b=e.target.closest('.btn,.acct');
   if(!b)return;
   b.hasAttribute('download')?sfx.done():sfx.click();
 });
