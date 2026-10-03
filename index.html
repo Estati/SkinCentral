@@ -110,6 +110,9 @@ input[type=file]{width:100%;font:inherit;font-size:var(--t);color:#cfc8bf;backgr
   border:4px solid;border-color:#fff #555 #555 #fff;outline:3px solid #000;padding:8px 12px}
 .acct:hover,.acct:focus-visible{background:#a0a4d8;color:var(--gold);outline-color:#fff}
 .acct:active{border-color:#555 #fff #fff #555}
+input[type=checkbox]{width:16px;height:16px;margin:0 8px 0 0;vertical-align:middle}
+.chk{margin:8px 0 0}
+.sep{border:0;border-top:3px solid #555;margin:24px 0 0}
 .acct img,.acct .ph{width:32px;height:32px;flex:none;background:#222;border:3px solid #000}
 .acct img{image-rendering:auto}
 .acct .ph{display:flex;align-items:center;justify-content:center;color:#fff}
@@ -215,6 +218,8 @@ function el(tag,attrs,...kids){
   kids.forEach(k=>k&&e.appendChild(k));
   return e;
 }
+// Like parent.append(...), but skips null items (plain append() would print the word "null").
+function add(parent,...kids){kids.forEach(k=>k&&parent.appendChild(k));return parent}
 function icon(p,cls){
   if(p.icon)return el('img',{src:p.icon,alt:'',class:'icon '+(cls||'')});
   const c=document.createElement('canvas');c.width=c.height=8;c.className='icon '+(cls||'');
@@ -362,7 +367,7 @@ function showUpload(){
     const tsBox=anon?el('div',{id:'f-ts'}):null;
     const human=anon?mountTurnstile(tsBox):null;
 
-    u.append(
+    add(u,
       anon?el('p',{class:'callout',text:'Uploading anonymously: no name is shown, and you cannot edit or delete the pack later.'}):null,
       el('p',{class:'hint',text:'Only upload skins made by you or your community, not ripped official content, and no NSFW content. A moderator checks every pack before it appears.'}),
       el('a',{class:'btn',href:'#/rules',text:'Read the rules first'}),
@@ -625,7 +630,8 @@ function showAccount(){
         }else{msg.className='msg err';msg.textContent=d.error||'That did not work.'}
       }catch{msg.className='msg err';msg.textContent='Network problem. Try again.'}
     }
-    // Turns one pack card into an edit form (name, description, tags).
+    const kb=n=>n<1048576?Math.max(1,Math.round(n/1024))+' KB':(n/1048576).toFixed(1)+' MB';
+    // Turns one pack card into an edit form (text, icon, screenshots, pack files).
     function showEdit(p,card){
       const name=el('input',{type:'text',maxlength:'40',value:p.name,'aria-label':'Pack name'});
       const desc=el('textarea',{maxlength:'500','aria-label':'Description'});desc.value=p.description||'';
@@ -634,33 +640,84 @@ function showAccount(){
       const save=el('button',{class:'btn',type:'button',text:'Save changes'});
       const cancel=el('button',{class:'btn',type:'button',text:'Cancel'});
       cancel.addEventListener('click',load);
+
+      const icon=el('input',{type:'file',accept:IMG_OK,'aria-label':'New icon'});
+      const shotRows=[1,2,3,4].map(i=>{
+        const n='shot'+i;
+        return {n,i,has:(p.images||[]).includes(n),input:el('input',{type:'file',accept:IMG_OK,'aria-label':'Screenshot '+i}),rm:el('input',{type:'checkbox'})};
+      });
+      const fileRows=PLATFORMS.map(([k,n])=>({
+        k,n,cur:(p.files||[]).find(f=>f.pkey===k),input:el('input',{type:'file','aria-label':n+' file'}),rm:el('input',{type:'checkbox'})
+      }));
+
       save.addEventListener('click',async()=>{
         emsg.className='msg';emsg.textContent='';
-        if(name.value.trim().length<3){emsg.className='msg err';emsg.textContent='Pack name must be at least 3 characters.';return}
-        save.disabled=true;emsg.textContent='Saving...';
+        const bad=t=>{emsg.className='msg err';emsg.textContent=t};
+        if(name.value.trim().length<3)return bad('Pack name must be at least 3 characters.');
+        const fd=new FormData();
+        fd.append('id',p.id);fd.append('name',name.value);fd.append('description',desc.value);fd.append('tags',tags.value);
+        if(icon.files[0]){
+          if(icon.files[0].size>MAXB.icon)return bad('The icon is too big (max 512 KB).');
+          fd.append('icon',icon.files[0]);
+        }
+        for(const r of shotRows){
+          const f=r.input.files[0];
+          if(f){if(f.size>MAXB.shot)return bad('Screenshot '+r.i+' is too big (max 2 MB).');fd.append(r.n,f)}
+          else if(r.has&&r.rm.checked)fd.append('remove_'+r.n,'1');
+        }
+        let kept=(p.files||[]).length;
+        for(const r of fileRows){
+          const f=r.input.files[0];
+          if(f){
+            if(f.size>MAXB.pack)return bad('The '+r.n+' file is too big (max 5 MB).');
+            fd.append('file_'+r.k,f);if(!r.cur)kept++;
+          }else if(r.cur&&r.rm.checked){fd.append('remove_file_'+r.k,'1');kept--}
+        }
+        if(kept<1)return bad('A pack needs at least one pack file.');
+        save.disabled=true;emsg.textContent='Saving... please wait.';
         try{
-          const r=await fetch('/api/my/edit',{method:'POST',headers:{'Content-Type':'application/json'},
-            body:JSON.stringify({id:p.id,name:name.value,description:desc.value,tags:tags.value})});
+          const r=await fetch('/api/my/edit',{method:'POST',body:fd});
           const d=await r.json().catch(()=>({}));
           if(r.ok&&d.ok){
+            const backInQueue=d.status==='pending'&&p.status!=='pending';
             const g=packs.find(x=>x.id===p.id);   // keep the gallery in step with the edit
-            if(g){g.name=d.name;g.description=d.description;g.tags=d.tags}
+            if(g){
+              if(backInQueue)packs=packs.filter(x=>x.id!==p.id);
+              else{g.name=d.name;g.description=d.description;g.tags=d.tags}
+            }
             msg.className='msg ok';
-            msg.textContent=p.status==='denied'?'Saved. Your pack is back in the queue for review.':'Saved.';
+            msg.textContent=backInQueue?'Saved. Your pack is back in the queue for review.':'Saved.';
             load();return;
           }
-          emsg.className='msg err';emsg.textContent=d.error||'That did not work.';
-        }catch{emsg.className='msg err';emsg.textContent='Network problem. Try again.'}
+          bad(d.error||'That did not work.');
+        }catch{bad('Network problem. Try again.')}
         save.disabled=false;
       });
+
       card.textContent='';
-      card.append(
+      add(card,
         el('h3',{text:'Edit pack'}),
+        p.status==='denied'?el('p',{class:'hint',text:'This pack was denied. Saving sends it back to Pending for another review.'}):null,
+        p.status==='approved'?el('p',{class:'hint',text:'Changing the name, description or tags keeps your pack live. Changing the icon, screenshots or files sends it back to Pending until a moderator approves it again.'}):null,
         el('label',{text:'Pack name'}),name,
         el('label',{text:'Description (optional)'}),desc,
         el('label',{text:'Tags, separated by commas (up to 5)'}),tags,
-        p.status==='denied'?el('p',{class:'hint',text:'This pack was denied. Saving sends it back to Pending for another review.'}):null,
-        emsg,el('div',{class:'dl'},save,cancel));
+        el('hr',{class:'sep'}),
+        el('label',{text:'Icon'}),
+        el('img',{src:'/files/'+p.id+'/icon',alt:'Current icon',class:'icon'}),
+        el('p',{class:'hint',text:'Choose a file only if you want to replace it. PNG, JPG or WebP, up to 512 KB.'}),icon,
+        el('h3',{text:'Screenshots'}),
+        el('p',{class:'hint',text:'Up to 4 images. A new file replaces the one in that slot. PNG, JPG or WebP, up to 2 MB each.'}));
+      shotRows.forEach(r=>add(card,
+        el('label',{text:'Screenshot '+r.i+(r.has?' (one is uploaded)':' (empty)')}),r.input,
+        r.has?el('label',{class:'chk'},r.rm,el('span',{text:'Remove this screenshot'})):null));
+      add(card,
+        el('h3',{text:'Pack files'}),
+        el('p',{class:'hint',text:'A new file replaces the current one for that platform, up to 5 MB each. You must keep at least one.'}));
+      fileRows.forEach(r=>add(card,
+        el('label',{text:r.n+(r.cur?' (current: '+r.cur.filename+', '+kb(r.cur.size)+')':' (none)')}),r.input,
+        r.cur?el('label',{class:'chk'},r.rm,el('span',{text:'Remove this file'})):null));
+      add(card,emsg,el('div',{class:'dl'},save,cancel));
     }
     function load(){
       fetch('/api/my',{cache:'no-store'}).then(r=>r.ok?r.json():Promise.reject()).then(items=>{
@@ -674,7 +731,7 @@ function showAccount(){
           del.addEventListener('click',()=>askConfirm('Delete this pack?',
             '"'+p.name+'" and all of its files will be deleted for good. This cannot be undone.',
             'Yes, delete it',()=>remove(p)));
-          card.append(
+          add(card,
             el('h3',{text:p.name}),
             el('p',{class:'by',text:'Status: '+p.status[0].toUpperCase()+p.status.slice(1)+'. Uploaded '+new Date(p.created_at*1000).toLocaleDateString()+'.'}),
             p.deny_reason?el('p',{class:'by',text:'Reason: '+p.deny_reason}):null,
