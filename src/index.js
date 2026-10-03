@@ -237,6 +237,7 @@ function packView(r) {
     slug: r.slug,
     name: r.name,
     creator: r.creator_name,
+    creatorId: r.creator_id && r.creator_id !== "anon" ? r.creator_id : null,
     date: new Date(r.created_at * 1000).toISOString().slice(0, 10),
     tags: JSON.parse(r.tags || "[]"),
     description: r.description,
@@ -272,7 +273,8 @@ async function myPacks(request, env) {
   }));
 }
 
-// A logged-in person edits one of their OWN packs.
+// A logged-in person edits one of their OWN packs. Moderators can edit ANY pack: their changes go live
+// right away and the pack keeps its status.
 // - Text only (name, description, tags): approved packs stay live.
 // - Changing the icon, a screenshot or a pack file: an approved pack goes back to Pending.
 // - A denied pack always goes back to Pending.
@@ -300,10 +302,14 @@ async function editMine(request, env, ctx) {
   }
   tags.length = Math.min(tags.length, 5);
 
-  // Only packs made by this exact Discord account can be edited here.
-  const row = await env.DB.prepare(
-    "SELECT id, status, images, files FROM packs WHERE id = ? AND creator_id = ?"
-  ).bind(id, s.id).first();
+  // Everyone else can only edit packs made by their own Discord account. Moderators can edit any pack.
+  const row = s.mod
+    ? await env.DB.prepare(
+        "SELECT id, creator_id, status, images, files FROM packs WHERE id = ?"
+      ).bind(id).first()
+    : await env.DB.prepare(
+        "SELECT id, creator_id, status, images, files FROM packs WHERE id = ? AND creator_id = ?"
+      ).bind(id, s.id).first();
   if (!row) return json({ error: "Pack not found." }, 404);
 
   let newImages = [], newFiles = [];
@@ -396,7 +402,7 @@ async function editMine(request, env, ctx) {
   }
 
   const wasDenied = row.status === "denied";
-  const backToPending = row.status !== "pending" && (wasDenied || mediaChanged);
+  const backToPending = !s.mod && row.status !== "pending" && (wasDenied || mediaChanged);
   if (backToPending) {
     const pending = await env.DB.prepare(
       "SELECT COUNT(*) AS n FROM packs WHERE creator_id = ? AND status = 'pending'"
@@ -410,7 +416,7 @@ async function editMine(request, env, ctx) {
     await env.DB.prepare(
       `UPDATE packs SET status = 'pending', deny_reason = NULL, reviewed_by = NULL, reviewed_at = NULL
        WHERE id = ? AND creator_id = ?`
-    ).bind(id, s.id).run();
+    ).bind(id, row.creator_id).run();
   }
 
   const done = [];
@@ -424,7 +430,7 @@ async function editMine(request, env, ctx) {
     await env.DB.prepare(
       "UPDATE packs SET name = ?, description = ?, tags = ?, images = ?, files = ? WHERE id = ? AND creator_id = ?"
     ).bind(
-      name, description, JSON.stringify(tags), JSON.stringify(newImages), JSON.stringify(newFiles), id, s.id
+      name, description, JSON.stringify(tags), JSON.stringify(newImages), JSON.stringify(newFiles), id, row.creator_id
     ).run();
   } catch (e) {
     await Promise.allSettled(done.filter((k) => !existing.has(k)).map((k) => env.FILES.delete(k)));
@@ -458,7 +464,8 @@ async function editMine(request, env, ctx) {
   return json({ ok: true, name, description, tags, status: backToPending ? "pending" : row.status });
 }
 
-// A logged-in person deletes one of their OWN packs: the files in R2 first, then the database row.
+// A logged-in person deletes one of their OWN packs; moderators can delete ANY pack.
+// The files in R2 go first, then the database row.
 async function deleteMine(request, env) {
   const s = await readSession(env, request);
   if (!s) return json({ error: "Please log in with Discord first." }, 401);
@@ -471,10 +478,10 @@ async function deleteMine(request, env) {
   }
   const id = String(body.id || "");
   if (!/^[a-f0-9]{12}$/.test(id)) return json({ error: "Bad pack id." }, 400);
-  // Only packs made by this exact Discord account can be deleted here.
-  const row = await env.DB.prepare(
-    "SELECT id FROM packs WHERE id = ? AND creator_id = ?"
-  ).bind(id, s.id).first();
+  // Everyone else can only delete packs made by their own Discord account. Moderators can delete any pack.
+  const row = s.mod
+    ? await env.DB.prepare("SELECT id FROM packs WHERE id = ?").bind(id).first()
+    : await env.DB.prepare("SELECT id FROM packs WHERE id = ? AND creator_id = ?").bind(id, s.id).first();
   if (!row) return json({ error: "Pack not found." }, 404);
   // Every file of a pack lives under "<id>/" in R2 (icon, screenshots, pack files).
   let cursor;
@@ -483,7 +490,7 @@ async function deleteMine(request, env) {
     if (page.objects.length) await env.FILES.delete(page.objects.map((o) => o.key));
     cursor = page.truncated ? page.cursor : undefined;
   } while (cursor);
-  await env.DB.prepare("DELETE FROM packs WHERE id = ? AND creator_id = ?").bind(id, s.id).run();
+  await env.DB.prepare("DELETE FROM packs WHERE id = ?").bind(id).run();
   return json({ ok: true });
 }
 
@@ -702,6 +709,8 @@ async function adminList(request, env, url) {
       anonymous: r.creator_id === "anon",
       visitorTag: r.ip_hash ? r.ip_hash.slice(0, 8) : null,
       denyReason: r.deny_reason,
+      imageNames: JSON.parse(r.images || "[]"),
+      fileInfo: JSON.parse(r.files || "[]"),
     }))
   );
 }
@@ -838,6 +847,8 @@ async function adminAll(request, env) {
       anonymous: r.creator_id === "anon",
       visitorTag: r.ip_hash ? r.ip_hash.slice(0, 8) : null,
       denyReason: r.deny_reason,
+      imageNames: JSON.parse(r.images || "[]"),
+      fileInfo: JSON.parse(r.files || "[]"),
     }))
   );
 }
