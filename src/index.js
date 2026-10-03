@@ -443,6 +443,97 @@ async function review(request, env) {
   return json({ ok: true, status });
 }
 
+/* ---------- REPORTS ---------- */
+async function report(request, env, ctx) {
+  const s = await readSession(env, request);
+  if (!s) return json({ error: "Please log in with Discord to send a report." }, 401);
+  if (!sameOrigin(request, env)) return json({ error: "Bad origin." }, 403);
+  let body;
+  try {
+    body = await request.json();
+  } catch {
+    return json({ error: "Bad request." }, 400);
+  }
+  const slug = clean(body.slug, 80);
+  const reason = clean(body.reason, 300);
+  if (!/^[A-Za-z0-9_-]{1,80}$/.test(slug)) return json({ error: "Bad pack." }, 400);
+  if (reason.length < 5) {
+    return json({ error: "Please say what is wrong (at least 5 characters)." }, 400);
+  }
+
+  const now = Math.floor(Date.now() / 1000);
+  const recent = await env.DB.prepare(
+    "SELECT COUNT(*) AS n FROM reports WHERE reporter_id = ? AND created_at > ?"
+  ).bind(s.id, now - 86400).first();
+  if (recent.n >= 5) {
+    return json({ error: "You have sent several reports today. Please try again tomorrow." }, 429);
+  }
+
+  const pack = await env.DB.prepare("SELECT id, name FROM packs WHERE slug = ?").bind(slug).first();
+  const packName = pack ? pack.name : clean(body.name, 60) || slug;
+  await env.DB.prepare(
+    `INSERT INTO reports (pack_slug, pack_id, pack_name, reporter_id, reporter_name, reason, created_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?)`
+  ).bind(slug, pack ? pack.id : null, packName, s.id, clean(s.name, 60), reason, now).run();
+
+  if (env.MOD_WEBHOOK_URL) {
+    ctx.waitUntil(
+      fetch(env.MOD_WEBHOOK_URL, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          content: `<@&${env.MOD_ROLE_ID}> A pack was reported.`,
+          allowed_mentions: { roles: [env.MOD_ROLE_ID] },
+          embeds: [{
+            title: packName,
+            description: reason,
+            url: env.SITE_URL + "/#/admin",
+            color: 0xaa0000,
+            fields: [{ name: "Reported by", value: clean(s.name, 60) || "unknown" }],
+          }],
+        }),
+      }).catch(() => {})
+    );
+  }
+  return json({ ok: true, message: "Thanks, your report was sent to the moderators." });
+}
+
+async function adminReports(request, env) {
+  const s = await readSession(env, request);
+  if (!s || !s.mod) return json({ error: "Moderators only." }, 403);
+  const { results } = await env.DB.prepare(
+    "SELECT * FROM reports WHERE status = 'open' ORDER BY created_at DESC LIMIT 100"
+  ).all();
+  return json(
+    results.map((r) => ({
+      id: r.id,
+      packId: r.pack_id,
+      packSlug: r.pack_slug,
+      packName: r.pack_name,
+      reporter: r.reporter_name,
+      reporterId: r.reporter_id,
+      reason: r.reason,
+      date: new Date(r.created_at * 1000).toISOString().slice(0, 10),
+    }))
+  );
+}
+
+async function closeReport(request, env) {
+  const s = await readSession(env, request);
+  if (!s || !s.mod) return json({ error: "Moderators only." }, 403);
+  if (!sameOrigin(request, env)) return json({ error: "Bad origin." }, 403);
+  let body;
+  try {
+    body = await request.json();
+  } catch {
+    return json({ error: "Bad request." }, 400);
+  }
+  const id = Number(body.id);
+  if (!Number.isInteger(id) || id < 1) return json({ error: "Bad report id." }, 400);
+  await env.DB.prepare("UPDATE reports SET status = 'closed' WHERE id = ?").bind(id).run();
+  return json({ ok: true });
+}
+
 /* ---------- FILE DOWNLOADS (from R2) ---------- */
 async function serveFile(request, env, url) {
   // Paths look like /files/<id>/icon  or  /files/<id>/<platform>/<filename>
