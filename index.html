@@ -7,6 +7,7 @@
 <meta name="description" content="Download Legacy Console Edition skins.">
 <link rel="icon" href="images/logo.png">
 <link href="https://fonts.googleapis.com/css2?family=VT323&display=swap" rel="stylesheet">
+<script src="https://challenges.cloudflare.com/turnstile/v0/api.js?render=explicit" async defer></script>
 <style>
 @font-face{font-family:'Mojang';src:url('fonts/Mojang-Regular.ttf') format('truetype');font-weight:400;font-display:swap}
 @font-face{font-family:'Mojang';src:url('fonts/Mojang-Bold.ttf') format('truetype');font-weight:700;font-display:swap}
@@ -102,6 +103,10 @@ input[type=file]{width:100%;font:inherit;font-size:var(--t);color:#cfc8bf;backgr
 .panel .card:hover{border-color:#5b5fa0}
 .panel .card .name{color:#202020}
 .panel .card .name:hover{color:#4a4ea0}
+/* warning popup (anonymous upload) */
+.modal{position:fixed;inset:0;background:rgba(0,0,0,.7);display:flex;align-items:center;justify-content:center;padding:var(--pad);z-index:10}
+.modal .panel{max-width:560px;margin:0;max-height:90vh;overflow:auto}
+.modal .panel p{margin:0 0 12px}
 .callout{background:#a0a4d8;color:var(--gold);text-shadow:var(--sh) var(--sh) 0 #3f3f00;text-align:center;border:3px solid;border-color:#c8cbf0 #3c3f78 #3c3f78 #c8cbf0;outline:3px solid #000;padding:12px;margin:16px 0}
 /* rules + tutorials pages */
 .doc h2 ~ h2{margin-top:32px}
@@ -283,16 +288,50 @@ function showPack(p){
    The limits below match the ones in src/index.js (the server checks them again). */
 const meP=fetch('/api/me').then(r=>r.json()).catch(()=>({loggedIn:false}));
 const PLATFORMS=[['xbox360','Xbox 360'],['ps3','PS3'],['wiiu','Wii U'],['vita','PS Vita'],['ps4','PS4'],['xboxone','Xbox One'],['switch','Switch']];
-const MAXB={icon:512*1024,shot:2*1024*1024,pack:5*1024*1024,total:20*1024*1024};
+const MAXB={icon:512*1024,shot:2*1024*1024,pack:5*1024*1024,total:20*1024*1024,anonTotal:10*1024*1024};
+// Public Turnstile Site Key (safe to show; the secret key stays in Cloudflare).
+const TURNSTILE_SITEKEY='0x4AAAAAAFNDmMezO6jwChH7';
 const IMG_OK='image/png,image/jpeg,image/webp';
+/* Warning popup shown before an anonymous upload. onYes() runs only if they press Continue. */
+function askAnon(onYes){
+  const esc=e=>{if(e.key==='Escape')close()};
+  const close=()=>{ov.remove();document.removeEventListener('keydown',esc)};
+  const yes=el('button',{class:'btn',type:'button',text:'I understand, continue'});
+  const no=el('button',{class:'btn',type:'button',text:'Cancel'});
+  const ov=el('div',{class:'modal'},
+    el('div',{class:'panel',role:'dialog','aria-modal':'true','aria-labelledby':'anon-title'},
+      el('h2',{id:'anon-title',text:'Upload anonymously?'}),
+      el('p',{text:'Before you continue, please know:'}),
+      el('p',{text:'- Your name will not be shown. The pack will say "Anonymous".'}),
+      el('p',{text:'- You cannot edit or delete the pack later.'}),
+      el('p',{text:'- If there is a problem with your pack, ask the moderators on our Discord server.'}),
+      el('p',{text:'- A moderator still checks every pack before it appears, and the rules still apply.'}),
+      el('div',{class:'dl'},yes,no)));
+  yes.addEventListener('click',()=>{close();onYes()});
+  no.addEventListener('click',close);
+  ov.addEventListener('click',e=>{if(e.target===ov)close()});
+  document.addEventListener('keydown',esc);
+  document.body.append(ov);
+  yes.focus();
+}
+/* Puts the Cloudflare "are you human" box into `box`. Returns a function that gives the current token. */
+function mountTurnstile(box){
+  let id=null,tries=0;
+  const t=setInterval(()=>{
+    if(!box.isConnected){clearInterval(t);return}
+    if(window.turnstile){clearInterval(t);id=turnstile.render(box,{sitekey:TURNSTILE_SITEKEY,theme:'light'})}
+    else if(++tries>50){clearInterval(t);box.textContent='The human check could not load. Reload the page and try again.'}
+  },200);
+  return {
+    token:()=>(id!==null&&window.turnstile)?turnstile.getResponse(id):'',
+    reset:()=>{if(id!==null&&window.turnstile)turnstile.reset(id)}
+  };
+}
 function showUpload(){
   const u=$('upload');u.textContent='';document.title='Upload a pack | Skin Central';
   u.append(el('a',{class:'btn',href:'#skins',text:'Back to all packs'}),el('h2',{text:'Upload a pack'}));
-  meP.then(me=>{
-    if(!me.loggedIn){
-      u.append(el('p',{text:'Log in with Discord to upload a pack.'}),el('a',{class:'btn',href:'/auth/login',text:'Log in with Discord'}));
-      return;
-    }
+
+  function buildForm(anon){
     const name=el('input',{type:'text',id:'f-name',maxlength:'40'});
     const desc=el('textarea',{id:'f-desc',maxlength:'500'});
     const tags=el('input',{type:'text',id:'f-tags',maxlength:'200',placeholder:'youtuber, funny, boys'});
@@ -303,8 +342,12 @@ function showUpload(){
     const go=el('button',{class:'btn',type:'button',text:'Submit for review'});
     const mine=el('div',{});
     const fail=t=>{msg.className='msg err';msg.textContent=t};
+    const maxTotal=anon?MAXB.anonTotal:MAXB.total;
+    const tsBox=anon?el('div',{id:'f-ts'}):null;
+    const human=anon?mountTurnstile(tsBox):null;
 
     u.append(
+      anon?el('p',{class:'callout',text:'Uploading anonymously: no name is shown, and you cannot edit or delete the pack later.'}):null,
       el('p',{class:'hint',text:'Only upload skins made by you or your community, not ripped official content, and no NSFW content. A moderator checks every pack before it appears.'}),
       el('a',{class:'btn',href:'#/rules',text:'Read the rules first'}),
       el('label',{for:'f-name',text:'Pack name'}),name,
@@ -315,11 +358,13 @@ function showUpload(){
       el('h3',{text:'Screenshots (optional)'}),
       el('p',{class:'hint',text:'Up to 4 images. PNG, JPG or WebP, up to 2 MB each.'}),...shots,
       el('h3',{text:'Pack files'}),
-      el('p',{class:'hint',text:'Add a file for each platform you have. At least one is required, up to 5 MB each.'}));
+      el('p',{class:'hint',text:'Add a file for each platform you have. At least one is required, up to 5 MB each'+(anon?', and up to 10 MB for the whole upload.':'.')}));
     pf.forEach(([k,n,input])=>u.append(el('label',{for:'f-file-'+k,text:n}),input));
+    if(anon)u.append(el('h3',{text:'Human check'}),tsBox);
     u.append(go,msg,mine);
 
     function loadMine(){
+      if(anon)return;
       fetch('/api/my').then(r=>r.json()).then(list=>{
         mine.textContent='';
         if(!Array.isArray(list)||!list.length)return;
@@ -350,10 +395,16 @@ function showUpload(){
         fd.append('file_'+k,f);total+=f.size;count++;
       }
       if(!count)return fail('Please add at least one pack file.');
-      if(total>MAXB.total)return fail('That upload is too big overall (max 20 MB).');
+      if(total>maxTotal)return fail('That upload is too big overall (max '+(maxTotal/1024/1024)+' MB).');
+      let url='/api/submit',headers={};
+      if(anon){
+        const tok=human.token();
+        if(!tok)return fail('Please finish the human check first.');
+        url='/api/submit?anon=1';headers={'X-Turnstile-Token':tok};
+      }
       go.disabled=true;msg.textContent='Uploading... please wait.';
       try{
-        const r=await fetch('/api/submit',{method:'POST',body:fd});
+        const r=await fetch(url,{method:'POST',headers,body:fd});
         const d=await r.json().catch(()=>({}));
         if(r.ok&&d.ok){
           msg.className='msg ok';msg.textContent=d.message;
@@ -362,8 +413,21 @@ function showUpload(){
           loadMine();
         }else fail(d.error||'Upload failed. Please try again.');
       }catch{fail('Upload failed. Check your connection and try again.')}
+      if(anon)human.reset();   // each human-check token works only once
       go.disabled=false;
     });
+  }
+
+  meP.then(me=>{
+    if(me.loggedIn){buildForm(false);return}
+    // Not logged in: choose between Discord login and anonymous upload.
+    const gate=el('div',{});
+    const anonBtn=el('button',{class:'btn',type:'button',text:'Upload without logging in'});
+    anonBtn.addEventListener('click',()=>askAnon(()=>{gate.remove();buildForm(true)}));
+    gate.append(
+      el('p',{text:'Log in with Discord to upload under your name, or upload without logging in.'}),
+      el('div',{class:'dl'},el('a',{class:'btn',href:'/auth/login',text:'Log in with Discord'}),anonBtn));
+    u.append(gate);
   });
 }
 
@@ -381,9 +445,10 @@ function adminCard(p,act){
   const shots=el('div',{class:'shots'});
   p.images.forEach(src=>shots.append(el('img',{src,alt:'screenshot',loading:'lazy'})));
   return el('div',{class:'card admin'},
+    p.anonymous?el('p',{class:'callout',text:'Anonymous upload (no login)'}):null,
     el('div',{class:'head'},icon(p),el('div',{},
       el('h3',{text:p.name}),
-      el('p',{class:'by',text:'By '+p.creator+' (Discord ID '+p.creatorId+'), '+p.date}),
+      el('p',{class:'by',text:p.anonymous?'By Anonymous (visitor tag '+(p.visitorTag||'unknown')+'), '+p.date:'By '+p.creator+' (Discord ID '+p.creatorId+'), '+p.date}),
       el('p',{class:'tags',text:p.tags.join(', ')}))),
     el('p',{class:'desc',text:p.description||'(no description)'}),
     p.denyReason?el('p',{class:'by',text:'Denied: '+p.denyReason}):null,
