@@ -264,9 +264,87 @@ async function myPacks(request, env) {
   const s = await readSession(env, request);
   if (!s) return json({ error: "Please log in with Discord first." }, 401);
   const { results } = await env.DB.prepare(
-    "SELECT id, name, status, deny_reason, created_at FROM packs WHERE creator_id = ? ORDER BY created_at DESC LIMIT 50"
+    "SELECT id, name, description, tags, status, deny_reason, created_at FROM packs WHERE creator_id = ? ORDER BY created_at DESC LIMIT 50"
   ).bind(s.id).all();
-  return json(results);
+  return json(results.map((r) => {
+    let tags = [];
+    try { tags = JSON.parse(r.tags || "[]"); } catch {}
+    return { ...r, tags };
+  }));
+}
+
+// A logged-in person edits the text of one of their OWN packs (name, description, tags).
+// Approved and pending packs keep their status. A denied pack goes back to Pending for another review.
+async function editMine(request, env, ctx) {
+  const s = await readSession(env, request);
+  if (!s) return json({ error: "Please log in with Discord first." }, 401);
+  if (!sameOrigin(request, env)) return json({ error: "Bad origin." }, 403);
+  let body;
+  try {
+    body = await request.json();
+  } catch {
+    return json({ error: "Bad request." }, 400);
+  }
+  const id = String(body.id || "");
+  if (!/^[a-f0-9]{12}$/.test(id)) return json({ error: "Bad pack id." }, 400);
+  const name = clean(body.name, 40);
+  const description = clean(body.description, 500);
+  if (name.length < 3) return json({ error: "Pack name must be at least 3 characters." }, 400);
+  const tags = [];
+  for (const t of clean(body.tags, 200).split(",")) {
+    const tag = clean(t, 20);
+    if (tag && !tags.some((x) => x.toLowerCase() === tag.toLowerCase())) tags.push(tag);
+  }
+  tags.length = Math.min(tags.length, 5);
+
+  // Only packs made by this exact Discord account can be edited here.
+  const row = await env.DB.prepare(
+    "SELECT id, status FROM packs WHERE id = ? AND creator_id = ?"
+  ).bind(id, s.id).first();
+  if (!row) return json({ error: "Pack not found." }, 404);
+
+  const wasDenied = row.status === "denied";
+  if (wasDenied) {
+    const pending = await env.DB.prepare(
+      "SELECT COUNT(*) AS n FROM packs WHERE creator_id = ? AND status = 'pending'"
+    ).bind(s.id).first();
+    if (pending.n >= LIMITS.maxPending) {
+      return json({
+        error: `You already have ${LIMITS.maxPending} packs waiting for review. Please wait for a moderator.`,
+      }, 429);
+    }
+    await env.DB.prepare(
+      `UPDATE packs SET name = ?, description = ?, tags = ?, status = 'pending',
+       deny_reason = NULL, reviewed_by = NULL, reviewed_at = NULL
+       WHERE id = ? AND creator_id = ?`
+    ).bind(name, description, JSON.stringify(tags), id, s.id).run();
+  } else {
+    await env.DB.prepare(
+      "UPDATE packs SET name = ?, description = ?, tags = ? WHERE id = ? AND creator_id = ?"
+    ).bind(name, description, JSON.stringify(tags), id, s.id).run();
+  }
+
+  if (wasDenied && env.MOD_WEBHOOK_URL) {
+    ctx.waitUntil(
+      fetch(env.MOD_WEBHOOK_URL, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          content: `<@&${env.MOD_ROLE_ID}> A denied pack was edited and is waiting for review again.`,
+          allowed_mentions: { roles: [env.MOD_ROLE_ID] },
+          embeds: [{
+            title: name,
+            description: description.slice(0, 300) || "(no description)",
+            url: env.SITE_URL + "/#/admin",
+            color: 0x8f8f8f,
+            fields: [{ name: "By", value: clean(s.name, 60) || "unknown" }],
+          }],
+        }),
+      }).catch(() => {})
+    );
+  }
+
+  return json({ ok: true, name, description, tags, status: wasDenied ? "pending" : row.status });
 }
 
 // A logged-in person deletes one of their OWN packs: the files in R2 first, then the database row.
@@ -748,6 +826,7 @@ async function route(request, env, ctx) {
   if (p === "/api/packs" && m === "GET") return listPacks(env);
   if (p === "/api/my" && m === "GET") return myPacks(request, env);
   if (p === "/api/my/delete" && m === "POST") return deleteMine(request, env);
+  if (p === "/api/my/edit" && m === "POST") return editMine(request, env, ctx);
   if (p === "/api/submit" && m === "POST") return submit(request, env, ctx);
   if (p === "/api/admin/list" && m === "GET") return adminList(request, env, url);
   if (p === "/api/admin/review" && m === "POST") return review(request, env);
