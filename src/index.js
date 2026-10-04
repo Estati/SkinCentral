@@ -243,6 +243,7 @@ function packView(r) {
     tags: JSON.parse(r.tags || "[]"),
     description: r.description,
     downloads: r.downloads || 0,
+    likes: r.like_count || 0,
     icon: `/files/${r.id}/icon`,
     images: images.map((n) => `/files/${r.id}/${n}`),
     files: files.map((f) => ({
@@ -254,9 +255,18 @@ function packView(r) {
 }
 
 async function listPacks(env) {
-  const { results } = await env.DB.prepare(
-    "SELECT * FROM packs WHERE status = 'approved' ORDER BY created_at DESC LIMIT 500"
-  ).all();
+  let results;
+  try {
+    ({ results } = await env.DB.prepare(
+      `SELECT p.*, (SELECT COUNT(*) FROM likes l WHERE l.pack_id = p.id) AS like_count
+       FROM packs p WHERE p.status = 'approved' ORDER BY p.created_at DESC LIMIT 500`
+    ).all());
+  } catch {
+    // likes table missing, just skip the counts
+    ({ results } = await env.DB.prepare(
+      "SELECT * FROM packs WHERE status = 'approved' ORDER BY created_at DESC LIMIT 500"
+    ).all());
+  }
   return json(results.map(packView));
 }
 
@@ -491,6 +501,9 @@ async function deleteMine(request, env) {
     if (page.objects.length) await env.FILES.delete(page.objects.map((o) => o.key));
     cursor = page.truncated ? page.cursor : undefined;
   } while (cursor);
+  // likes and comments go with it
+  await env.DB.prepare("DELETE FROM likes WHERE pack_id = ?").bind(id).run().catch(() => {});
+  await env.DB.prepare("DELETE FROM comments WHERE pack_id = ?").bind(id).run().catch(() => {});
   await env.DB.prepare("DELETE FROM packs WHERE id = ?").bind(id).run();
   return json({ ok: true });
 }
@@ -943,6 +956,109 @@ async function serveFile(request, env, url, ctx) {
   return new Response(obj.body, { headers });
 }
 
+/* ---------- likes + comments ---------- */
+// only approved packs can get likes and comments
+async function approvedPack(env, id) {
+  if (!/^[a-f0-9]{12}$/.test(id)) return null;
+  return env.DB.prepare("SELECT id FROM packs WHERE id = ? AND status = 'approved'").bind(id).first();
+}
+
+// like count, if im logged in whether i liked it, and the comments for one pack (anyone can read these)
+async function packSocial(request, env, url) {
+  const id = url.searchParams.get("id") || "";
+  if (!(await approvedPack(env, id))) return notFound();
+  const s = await readSession(env, request);
+  const likes = await env.DB.prepare("SELECT COUNT(*) AS n FROM likes WHERE pack_id = ?").bind(id).first();
+  let liked = false;
+  if (s) {
+    liked = !!(await env.DB.prepare(
+      "SELECT 1 AS x FROM likes WHERE pack_id = ? AND user_id = ?"
+    ).bind(id, s.id).first());
+  }
+  const { results } = await env.DB.prepare(
+    "SELECT id, user_id, user_name, body, created_at FROM comments WHERE pack_id = ? ORDER BY created_at DESC LIMIT 100"
+  ).bind(id).all();
+  return json({
+    likes: likes.n,
+    liked,
+    comments: results.map((c) => ({
+      id: c.id,
+      name: c.user_name,
+      userId: c.user_id,
+      body: c.body,
+      date: new Date(c.created_at * 1000).toISOString().slice(0, 10),
+      // you can delete your own comments, mods can delete any
+      canDelete: !!s && (s.mod || s.id === c.user_id),
+    })),
+  });
+}
+
+// reads the json body for the like/comment routes and checks login + origin
+async function socialInput(request, env) {
+  const s = await readSession(env, request);
+  if (!s) return { err: json({ error: "Log in with Discord first." }, 401) };
+  if (!sameOrigin(request, env)) return { err: json({ error: "Bad origin." }, 403) };
+  let body;
+  try {
+    body = await request.json();
+  } catch {
+    return { err: json({ error: "Bad request." }, 400) };
+  }
+  return { s, body };
+}
+
+// like or unlike (one like per account per pack)
+async function setLike(request, env) {
+  const { s, body, err } = await socialInput(request, env);
+  if (err) return err;
+  const id = String(body.id || "");
+  if (!(await approvedPack(env, id))) return json({ error: "Pack not found." }, 404);
+  if (body.like) {
+    await env.DB.prepare(
+      "INSERT OR IGNORE INTO likes (pack_id, user_id, created_at) VALUES (?, ?, ?)"
+    ).bind(id, s.id, Math.floor(Date.now() / 1000)).run();
+  } else {
+    await env.DB.prepare("DELETE FROM likes WHERE pack_id = ? AND user_id = ?").bind(id, s.id).run();
+  }
+  const likes = await env.DB.prepare("SELECT COUNT(*) AS n FROM likes WHERE pack_id = ?").bind(id).first();
+  return json({ ok: true, likes: likes.n, liked: !!body.like });
+}
+
+// post a comment (300 characters max, 5 per hour per person)
+async function addComment(request, env) {
+  const { s, body, err } = await socialInput(request, env);
+  if (err) return err;
+  const id = String(body.id || "");
+  const text = clean(body.body, 300);
+  if (!text) return json({ error: "Write something first." }, 400);
+  if (!(await approvedPack(env, id))) return json({ error: "Pack not found." }, 404);
+  const now = Math.floor(Date.now() / 1000);
+  const recent = await env.DB.prepare(
+    "SELECT COUNT(*) AS n FROM comments WHERE user_id = ? AND created_at > ?"
+  ).bind(s.id, now - 3600).first();
+  if (recent.n >= 5) return json({ error: "Slow down, you can post 5 comments per hour." }, 429);
+  const cid = [...crypto.getRandomValues(new Uint8Array(6))]
+    .map((b) => b.toString(16).padStart(2, "0"))
+    .join("");
+  await env.DB.prepare(
+    "INSERT INTO comments (id, pack_id, user_id, user_name, body, created_at) VALUES (?, ?, ?, ?, ?, ?)"
+  ).bind(cid, id, s.id, clean(s.name, 60) || "unknown", text, now).run();
+  return json({ ok: true });
+}
+
+// delete a comment, your own or any if youre a mod
+async function deleteComment(request, env) {
+  const { s, body, err } = await socialInput(request, env);
+  if (err) return err;
+  const cid = String(body.id || "");
+  if (!/^[a-f0-9]{12}$/.test(cid)) return json({ error: "Bad comment id." }, 400);
+  const row = await env.DB.prepare("SELECT id, user_id FROM comments WHERE id = ?").bind(cid).first();
+  if (!row) return json({ error: "Comment not found." }, 404);
+  if (!s.mod && row.user_id !== s.id) return json({ error: "That is not your comment." }, 403);
+  await env.DB.prepare("DELETE FROM comments WHERE id = ?").bind(cid).run();
+  return json({ ok: true });
+}
+
 /* ---------- router ---------- */
 async function route(request, env, ctx) {
   const url = new URL(request.url);
@@ -955,6 +1071,10 @@ async function route(request, env, ctx) {
   if (p === "/api/me") return me(request, env);
   if (p === "/api/packs" && m === "GET") return listPacks(env);
   if (p === "/api/my" && m === "GET") return myPacks(request, env);
+  if (p === "/api/social" && m === "GET") return packSocial(request, env, url);
+  if (p === "/api/like" && m === "POST") return setLike(request, env);
+  if (p === "/api/comment" && m === "POST") return addComment(request, env);
+  if (p === "/api/comment/delete" && m === "POST") return deleteComment(request, env);
   if (p === "/api/my/delete" && m === "POST") return deleteMine(request, env);
   if (p === "/api/my/edit" && m === "POST") return editMine(request, env, ctx);
   if (p === "/api/submit" && m === "POST") return submit(request, env, ctx);
