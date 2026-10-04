@@ -253,6 +253,77 @@ const PLATFORM_ICONS={
 };
 function pIcon(name){const src=PLATFORM_ICONS[name];if(!src)return null;const i=el('img',{src,alt:'',class:'picon',title:name});i.addEventListener('error',()=>i.remove());return i}
 
+/* likes + comments on a pack page (need discord login to like or comment) */
+function socialBox(p){
+  const box=el('div',{class:'social'});
+  const likeBtn=el('button',{class:'btn',type:'button',text:'Like'});
+  const msg=el('p',{class:'msg',role:'status'});
+  const list=el('div',{text:'Loading comments...'});
+  const compose=el('div',{});
+  let state={likes:p.likes||0,liked:false};
+  let me={loggedIn:false};
+  const paintLike=()=>{likeBtn.textContent=(state.liked?'Liked':'Like')+' ('+state.likes+')'};
+  const say=(t,ok)=>{msg.className='msg '+(ok?'ok':'err');msg.textContent=t};
+  const post=async(url,body)=>{
+    const r=await fetch(url,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});
+    const d=await r.json().catch(()=>({}));
+    return {ok:r.ok&&d.ok,d};
+  };
+  function paintComments(items){
+    list.textContent='';
+    if(!items.length){list.appendChild(el('p',{class:'empty',text:'No comments yet.'}));return}
+    items.forEach(c=>{
+      const del=c.canDelete?el('button',{class:'btn',type:'button',text:'Delete'}):null;
+      if(del)del.addEventListener('click',()=>askConfirm('Delete this comment?','This cannot be undone.','Yes, delete it',async()=>{
+        const r=await post('/api/comment/delete',{id:c.id});
+        if(r.ok)load();else say(r.d.error||'That did not work.');
+      }));
+      list.appendChild(el('div',{class:'card admin'},
+        el('p',{class:'by'},creatorLink({creator:c.name,creatorId:c.userId}),el('span',{text:', '+c.date})),
+        el('p',{class:'desc',text:c.body}),
+        del));
+    });
+  }
+  function load(){
+    fetch('/api/social?id='+encodeURIComponent(p.id),{cache:'no-store'}).then(r=>r.ok?r.json():Promise.reject()).then(d=>{
+      state={likes:d.likes,liked:d.liked};p.likes=d.likes;paintLike();paintComments(d.comments);
+    }).catch(()=>{list.textContent='Could not load comments.'});
+  }
+  likeBtn.addEventListener('click',async()=>{
+    if(!me.loggedIn){say('Log in with Discord to like packs.');return}
+    likeBtn.disabled=true;
+    try{
+      const r=await post('/api/like',{id:p.id,like:!state.liked});
+      if(r.ok){state={likes:r.d.likes,liked:r.d.liked};p.likes=r.d.likes;paintLike();msg.textContent=''}
+      else say(r.d.error||'That did not work.');
+    }catch{say('Network problem. Try again.')}
+    likeBtn.disabled=false;
+  });
+  meP.then(m=>{
+    me=m;
+    if(!m.loggedIn){
+      compose.append(el('p',{class:'hint',text:'Log in with Discord to like and comment.'}),el('a',{class:'btn',href:'/auth/login',text:'Log in with Discord'}));
+      return;
+    }
+    const text=el('textarea',{maxlength:'300',placeholder:'Write a comment (300 characters max)','aria-label':'Comment'});
+    const send=el('button',{class:'btn',type:'button',text:'Post comment'});
+    send.addEventListener('click',async()=>{
+      if(!text.value.trim()){say('Write something first.');return}
+      send.disabled=true;
+      try{
+        const r=await post('/api/comment',{id:p.id,body:text.value});
+        if(r.ok){text.value='';say('Posted.',true);load()}
+        else say(r.d.error||'That did not work.');
+      }catch{say('Network problem. Try again.')}
+      send.disabled=false;
+    });
+    compose.append(text,send);
+  });
+  paintLike();load();
+  box.append(el('h3',{text:'Likes'}),el('div',{class:'dl'},likeBtn),el('h3',{text:'Comments'}),compose,msg,list);
+  return box;
+}
+
 /* report button, sends a report to the mods (needs discord login) */
 function reportBox(p){
   const box=el('div',{class:'reportbox'});
@@ -296,7 +367,7 @@ function renderList(filter){
       el('div',{class:'name',text:p.name}),
       pl.children.length?pl:null,
       el('small',{},el('span',{text:'by '}),creatorLink(p),el('span',{text:' for '+p.files.map(x=>x.platform).join(', ')})),
-      typeof p.downloads==='number'?el('small',{text:countText(p.downloads,'download')}):null,
+      typeof p.downloads==='number'?el('small',{text:countText(p.likes||0,'like')+', '+countText(p.downloads,'download')}):null,
       el('a',{href,class:'btn',text:'View pack'})));
   });
 }
@@ -317,6 +388,8 @@ function showPack(p){
     p.images.forEach(src=>g.appendChild(el('img',{src,alt:p.name+' preview',loading:'lazy'})));
     d.append(el('h3',{text:'Screenshots'}),g);
   }
+  // likes + comments only for packs in the database (packs.json ones dont have an id/counts)
+  if(p.id&&typeof p.downloads==='number')d.append(socialBox(p));
   d.append(reportBox(p));
 }
 
