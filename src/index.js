@@ -1,15 +1,15 @@
 const enc = new TextEncoder();
 
-/* ---------- SETTINGS (edit these numbers freely) ---------- */
+/* ---------- settings (change the numbers if you want) ---------- */
 const LIMITS = {
-  icon: 512 * 1024,        // icon image, max size
-  shot: 2 * 1024 * 1024,   // each screenshot, max size
-  pack: 5 * 1024 * 1024,   // each pack file, max size
-  total: 20 * 1024 * 1024, // whole submission, max size
-  maxPending: 3,           // how many packs one person can have waiting at once
-  anonTotal: 10 * 1024 * 1024, // anonymous upload (no login), whole submission, max size
-  anonPerDay: 2,           // anonymous uploads allowed per visitor per day
-  anonMaxPending: 10,      // anonymous packs allowed to wait for review across the whole site
+  icon: 512 * 1024,        // icon max size
+  shot: 2 * 1024 * 1024,   // each screenshot max
+  pack: 5 * 1024 * 1024,   // each pack file max
+  total: 20 * 1024 * 1024, // whole upload max
+  maxPending: 3,           // pending packs one person can have at once
+  anonTotal: 10 * 1024 * 1024, // anon upload whole thing max
+  anonPerDay: 2,           // anon uploads per visitor per day
+  anonMaxPending: 10,      // anon packs waiting for review site wide
 };
 const PLATFORMS = {
   xbox360: "Xbox 360",
@@ -20,7 +20,7 @@ const PLATFORMS = {
 };
 const BLOCKED_EXT = /\.(exe|dll|bat|cmd|com|msi|scr|js|mjs|vbs|ps1|apk|ipa|jar|sh|html?|svgz?|php|py)$/i;
 
-/* ---------- SMALL HELPERS ---------- */
+/* ---------- small helpers ---------- */
 function toB64url(bytes) {
   let s = "";
   for (const b of new Uint8Array(bytes)) s += String.fromCharCode(b);
@@ -90,7 +90,7 @@ function sameOrigin(request, env) {
   return request.headers.get("Origin") === env.SITE_URL;
 }
 
-// Looks at the first bytes of a file to check it is really a PNG, JPG or WebP.
+// checks the first bytes to make sure its really a png, jpg or webp
 async function sniffImage(file) {
   const b = new Uint8Array(await file.slice(0, 12).arrayBuffer());
   if (b[0] === 0x89 && b[1] === 0x50 && b[2] === 0x4e && b[3] === 0x47) return "image/png";
@@ -102,7 +102,7 @@ async function sniffImage(file) {
   return null;
 }
 
-/* ---------- LOGIN SESSIONS ---------- */
+/* ---------- login sessions ---------- */
 function hmacKey(secret) {
   return crypto.subtle.importKey(
     "raw",
@@ -197,7 +197,7 @@ async function callback(request, env, url) {
   }
 
   const isMod = roles.includes(env.MOD_ROLE_ID);
-  // Moderators get a shorter login (1 day) so a removed role stops working quickly.
+  // mods get a 1 day login so a removed role stops working fast
   const maxAge = isMod ? 60 * 60 * 24 : 60 * 60 * 24 * 7;
   const session = await signSession(env, {
     id: user.id,
@@ -228,8 +228,8 @@ async function me(request, env) {
   );
 }
 
-/* ---------- PACKS ---------- */
-// Turns a database row into the same shape packs.json uses.
+/* ---------- packs ---------- */
+// turns a database row into the same shape as packs.json
 function packView(r) {
   const files = JSON.parse(r.files || "[]");
   const images = JSON.parse(r.images || "[]");
@@ -274,11 +274,10 @@ async function myPacks(request, env) {
   }));
 }
 
-// A logged-in person edits one of their OWN packs. Moderators can edit ANY pack: their changes go live
-// right away and the pack keeps its status.
-// - Text only (name, description, tags): approved packs stay live.
-// - Changing the icon, a screenshot or a pack file: an approved pack goes back to Pending.
-// - A denied pack always goes back to Pending.
+// edit your own pack. mods can edit ANY pack, theirs go live right away and the status stays
+// - text only (name, description, tags): approved packs stay live
+// - new icon, screenshot or pack file: approved pack goes back to pending
+// - denied pack always goes back to pending
 async function editMine(request, env, ctx) {
   const s = await readSession(env, request);
   if (!s) return json({ error: "Please log in with Discord first." }, 401);
@@ -303,7 +302,7 @@ async function editMine(request, env, ctx) {
   }
   tags.length = Math.min(tags.length, 5);
 
-  // Everyone else can only edit packs made by their own Discord account. Moderators can edit any pack.
+  // normal people can only edit their own packs, mods can edit any pack
   const row = s.mod
     ? await env.DB.prepare(
         "SELECT id, creator_id, status, images, files FROM packs WHERE id = ?"
@@ -317,7 +316,7 @@ async function editMine(request, env, ctx) {
   try { newImages = JSON.parse(row.images || "[]"); } catch {}
   try { newFiles = JSON.parse(row.files || "[]"); } catch {}
 
-  // What is stored in R2 for this pack right now (key -> size), used to check the total size.
+  // whats in R2 for this pack right now (key -> size), for the total size check
   const sizes = new Map();
   let cursor;
   do {
@@ -328,7 +327,7 @@ async function editMine(request, env, ctx) {
   const existing = new Set(sizes.keys());
 
   const puts = [];     // new files to store
-  const removes = [];  // old files to delete once everything worked
+  const removes = [];  // old files to delete after everything worked
   let mediaChanged = false;
 
   const icon = form.get("icon");
@@ -413,7 +412,7 @@ async function editMine(request, env, ctx) {
         error: `You already have ${LIMITS.maxPending} packs waiting for review. Please wait for a moderator.`,
       }, 429);
     }
-    // Pull the pack off the site BEFORE any new file is stored, so unreviewed files are never public.
+    // take the pack off the site BEFORE storing new files so unreviewed stuff is never public
     await env.DB.prepare(
       `UPDATE packs SET status = 'pending', deny_reason = NULL, reviewed_by = NULL, reviewed_at = NULL
        WHERE id = ? AND creator_id = ?`
@@ -465,8 +464,8 @@ async function editMine(request, env, ctx) {
   return json({ ok: true, name, description, tags, status: backToPending ? "pending" : row.status });
 }
 
-// A logged-in person deletes one of their OWN packs; moderators can delete ANY pack.
-// The files in R2 go first, then the database row.
+// delete your own pack, mods can delete any pack
+// R2 files go first, then the database row
 async function deleteMine(request, env) {
   const s = await readSession(env, request);
   if (!s) return json({ error: "Please log in with Discord first." }, 401);
@@ -479,12 +478,12 @@ async function deleteMine(request, env) {
   }
   const id = String(body.id || "");
   if (!/^[a-f0-9]{12}$/.test(id)) return json({ error: "Bad pack id." }, 400);
-  // Everyone else can only delete packs made by their own Discord account. Moderators can delete any pack.
+  // normal people can only delete their own packs, mods can delete any pack
   const row = s.mod
     ? await env.DB.prepare("SELECT id FROM packs WHERE id = ?").bind(id).first()
     : await env.DB.prepare("SELECT id FROM packs WHERE id = ? AND creator_id = ?").bind(id, s.id).first();
   if (!row) return json({ error: "Pack not found." }, 404);
-  // Every file of a pack lives under "<id>/" in R2 (icon, screenshots, pack files).
+  // every file of a pack is under "<id>/" in R2
   let cursor;
   do {
     const page = await env.FILES.list({ prefix: id + "/", cursor });
@@ -495,7 +494,7 @@ async function deleteMine(request, env) {
   return json({ ok: true });
 }
 
-// Asks Cloudflare Turnstile whether the visitor passed the human check.
+// asks turnstile if the visitor passed the human check
 async function checkHuman(request, env) {
   if (!env.TURNSTILE_SECRET) return false;
   const token = request.headers.get("X-Turnstile-Token") || "";
@@ -515,10 +514,10 @@ async function checkHuman(request, env) {
   }
 }
 
-// A scrambled (hashed) tag for a visitor's IP address. The real IP is never stored.
+// scrambled (hashed) tag for a visitors ip, the real ip never gets stored
 async function visitorTag(request, env) {
   let ip = request.headers.get("CF-Connecting-IP") || "unknown";
-  // For IPv6 only the first half is used, so changing the end of the address doesn't dodge the limit.
+  // ipv6 only uses the first half so changing the end of the address doesnt skip the limit
   if (ip.includes(":")) ip = ip.split(":").slice(0, 4).join(":");
   const sig = await crypto.subtle.sign(
     "HMAC",
@@ -529,7 +528,7 @@ async function visitorTag(request, env) {
 }
 
 async function submit(request, env, ctx) {
-  // Anonymous uploads use /api/submit?anon=1: no login, but a human check and stricter limits.
+  // anon uploads use /api/submit?anon=1, no login but a human check and tighter limits
   const anon = new URL(request.url).searchParams.get("anon") === "1";
   let s;
   if (anon) {
@@ -691,7 +690,7 @@ async function submit(request, env, ctx) {
   return json({ ok: true, message: "Submitted! A moderator will review your pack soon." });
 }
 
-/* ---------- MODERATION ---------- */
+/* ---------- moderation ---------- */
 async function adminList(request, env, url) {
   const s = await readSession(env, request);
   if (!s || !s.mod) return json({ error: "Moderators only." }, 403);
@@ -742,7 +741,7 @@ async function review(request, env) {
   return json({ ok: true, status });
 }
 
-/* ---------- REPORTS ---------- */
+/* ---------- reports ---------- */
 async function report(request, env, ctx) {
   const s = await readSession(env, request);
   if (!s) return json({ error: "Please log in with Discord to send a report." }, 401);
@@ -833,7 +832,7 @@ async function closeReport(request, env) {
   return json({ ok: true });
 }
 
-/* ---------- MODERATION: ALL PACKS + EDIT DETAILS ---------- */
+/* ---------- moderation: all packs + edit details ---------- */
 async function adminAll(request, env) {
   const s = await readSession(env, request);
   if (!s || !s.mod) return json({ error: "Moderators only." }, 403);
@@ -882,9 +881,9 @@ async function editPack(request, env) {
   return json({ ok: true });
 }
 
-/* ---------- FILE DOWNLOADS (from R2) ---------- */
+/* ---------- file downloads (from R2) ---------- */
 async function serveFile(request, env, url) {
-  // Paths look like /files/<id>/icon  or  /files/<id>/<platform>/<filename>
+  // paths look like /files/<id>/icon or /files/<id>/<platform>/<filename>
   const parts = url.pathname.split("/");
   const id = parts[2] || "";
   const a = parts[3] || "";
@@ -907,7 +906,7 @@ async function serveFile(request, env, url) {
   ).bind(id).first();
   if (!row) return notFound();
 
-  // Pending or denied packs can only be seen by moderators and the person who uploaded them.
+  // pending or denied packs can only be seen by mods and the uploader
   let allowed = row.status === "approved";
   if (!allowed) {
     const s = await readSession(env, request);
@@ -936,7 +935,7 @@ async function serveFile(request, env, url) {
   return new Response(obj.body, { headers });
 }
 
-/* ---------- ROUTER ---------- */
+/* ---------- router ---------- */
 async function route(request, env, ctx) {
   const url = new URL(request.url);
   const p = url.pathname;
