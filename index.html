@@ -228,6 +228,8 @@ function el(tag,attrs,...kids){
 }
 // same as parent.append() but skips nulls (plain append prints "null")
 function add(parent,...kids){kids.forEach(k=>k&&parent.appendChild(k));return parent}
+// "1 download" / "5 downloads"
+function countText(n,word){return n+' '+word+(n===1?'':'s')}
 // creator name, links to their discord profile if we have their id
 function creatorLink(p){
   if(!p.creatorId||!/^\d{15,25}$/.test(String(p.creatorId)))return el('span',{text:p.creator});
@@ -294,6 +296,7 @@ function renderList(filter){
       el('div',{class:'name',text:p.name}),
       pl.children.length?pl:null,
       el('small',{},el('span',{text:'by '}),creatorLink(p),el('span',{text:' for '+p.files.map(x=>x.platform).join(', ')})),
+      typeof p.downloads==='number'?el('small',{text:countText(p.downloads,'download')}):null,
       el('a',{href,class:'btn',text:'View pack'})));
   });
 }
@@ -307,7 +310,7 @@ function showPack(p){
   });
   d.append(
     el('div',{class:'head'},icon(p,'big'),el('div',{},
-      el('h2',{text:p.name}),el('p',{class:'by'},el('span',{text:'By '}),creatorLink(p),el('span',{text:', added '+p.date})),el('p',{class:'tags',text:p.tags.join(', ')}))),
+      el('h2',{text:p.name}),el('p',{class:'by'},el('span',{text:'By '}),creatorLink(p),el('span',{text:', added '+p.date})),typeof p.downloads==='number'?el('p',{class:'by',text:countText(p.downloads,'download')}):null,el('p',{class:'tags',text:p.tags.join(', ')}))),
     el('p',{class:'desc',text:p.description}),el('h3',{text:'Download'}),dl);
   if(p.images&&p.images.length){
     const g=el('div',{class:'shots'});
