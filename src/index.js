@@ -16,6 +16,7 @@ const PLATFORMS = {
   ps3: "PS3",
   wiiu: "Wii U",
   vita: "PS Vita",
+  switch: "Switch",
 };
 const BLOCKED_EXT = /\.(exe|dll|bat|cmd|com|msi|scr|js|mjs|vbs|ps1|apk|ipa|jar|sh|html?|svgz?|php|py)$/i;
 
