@@ -327,7 +327,7 @@ function showPack(p){
    Sends the pack to /api/submit. Only people logged in with Discord can use it.
    The limits below match the ones in src/index.js (the server checks them again). */
 const meP=fetch('/api/me').then(r=>r.json()).catch(()=>({loggedIn:false}));
-const PLATFORMS=[['xbox360','Xbox 360'],['ps3','PS3'],['wiiu','Wii U'],['vita','PS Vita']];
+const PLATFORMS=[['xbox360','Xbox 360'],['ps3','PS3'],['wiiu','Wii U'],['vita','PS Vita'],['switch','Switch']];
 const MAXB={icon:512*1024,shot:2*1024*1024,pack:5*1024*1024,total:20*1024*1024,anonTotal:10*1024*1024};
 // Public Turnstile Site Key (safe to show; the secret key stays in Cloudflare).
 const TURNSTILE_SITEKEY='0x4AAAAAAFNDmMezO6jwChH7';
