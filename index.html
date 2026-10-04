@@ -254,6 +254,7 @@ const PLATFORM_ICONS={
   'PS3':'images/platforms/ps3.png',
   'Wii U':'images/platforms/wiiu.png',
   'PS Vita':'images/platforms/psvita.png',
+  'Switch':'images/platforms/switch.png',
 };
 function pIcon(name){const src=PLATFORM_ICONS[name];if(!src)return null;const i=el('img',{src,alt:'',class:'picon',title:name});i.addEventListener('error',()=>i.remove());return i}
 
