@@ -158,7 +158,7 @@ footer{margin-top:8px;font-size:var(--t);color:#cfc8bf;text-shadow:2px 2px 0 #00
   <div class="row">
     <a class="btn" href="#skins">Browse packs</a>
     <a class="btn" href="#/upload">Upload a pack</a>
-    <a class="btn" href="#/tutorials">Tutorials and Tools</a>
+    <a class="btn" href="#/tutorials">Tools</a>
     <a class="btn" href="#/rules">Rules</a>
     <a class="btn" href="https://discord.gg/atQA5ecyxj">Join the Discord</a>
     <a class="btn" id="login" href="/auth/login">Log in with Discord</a>
@@ -312,7 +312,7 @@ function showPack(p){
     const pi=pIcon(f.platform);if(pi)a.prepend(pi);
     dl.appendChild(a);
   });
-  d.append(el('a',{class:'btn',href:'#skins',text:'Back to all packs'}),
+  d.append(
     el('div',{class:'head'},icon(p,'big'),el('div',{},
       el('h2',{text:p.name}),el('p',{class:'by'},el('span',{text:'By '}),creatorLink(p),el('span',{text:', added '+p.date})),el('p',{class:'tags',text:p.tags.join(', ')}))),
     el('p',{class:'desc',text:p.description}),el('h3',{text:'Download'}),dl);
@@ -370,7 +370,7 @@ function mountTurnstile(box){
 }
 function showUpload(){
   const u=$('upload');u.textContent='';document.title='Upload a pack | Skin Central';
-  u.append(el('a',{class:'btn',href:'#skins',text:'Back to all packs'}),el('h2',{text:'Upload a pack'}));
+  u.append(el('h2',{text:'Upload a pack'}));
 
   function buildForm(anon){
     const name=el('input',{type:'text',id:'f-name',maxlength:'40'});
@@ -513,7 +513,7 @@ function reportCard(r,act,close){
 }
 function showAdmin(){
   const a=$('admin');a.textContent='';document.title='Moderation | Skin Central';
-  a.append(el('a',{class:'btn',href:'#skins',text:'Back to all packs'}),el('h2',{text:'Moderation'}));
+  a.append(el('h2',{text:'Moderation'}));
   meP.then(me=>{
     if(!me.loggedIn||!me.isMod){
       a.append(el('p',{text:me.loggedIn?'Moderators only.':'Log in with a moderator account.'}));
@@ -597,7 +597,7 @@ const RULES=[
 ];
 function showRules(){
   const r=$('rules');r.textContent='';document.title='Rules | Skin Central';
-  r.append(el('a',{class:'btn',href:'#skins',text:'Back to all packs'}),el('h2',{text:'Rules'}),
+  r.append(el('h2',{text:'Rules'}),
     el('p',{class:'callout',text:'Every pack is checked by a moderator before it appears.'}));
   RULES.forEach((x,i)=>r.append(el('h3',{text:(i+1)+'. '+x[0]}),el('p',{text:x[1]})));
   r.append(el('h2',{text:'Reports and takedowns'}),
@@ -619,14 +619,14 @@ const TUTORIALS=[
   ['Wii U tutorial on YouTube','https://www.youtube.com/watch?v=AakdZGOzMoY']
 ];
 function showTutorials(){
-  const t=$('tutorials');t.textContent='';document.title='Tutorials and Tools | Skin Central';
-  t.append(el('a',{class:'btn',href:'#skins',text:'Back to all packs'}),el('h2',{text:'Tutorials and Tools'}),
+  const t=$('tutorials');t.textContent='';document.title='Tools | Skin Central';
+  t.append(el('h2',{text:'Tools'}),
     el('h3',{text:'Tutorials'}),
     el('p',{class:'hint',text:'Video guides on YouTube. They open in a new tab.'}));
   const g=el('div',{class:'dl'});
   TUTORIALS.forEach(x=>g.append(el('a',{class:'btn',href:x[1],target:'_blank',rel:'noopener noreferrer',text:x[0]})));
   t.append(g,
-    el('h3',{text:'Tools'}),
+    el('h3',{text:'Downloads'}),
     el('p',{class:'hint',text:'A community-made tool for editing Legacy Console Edition pack files. It is made by its own authors, not by Skin Central. The download opens in a new tab.'}),
     el('div',{class:'dl'},el('a',{class:'btn',href:'https://gamebanana.com/dl/985300',target:'_blank',rel:'noopener noreferrer',text:'Download PCK Studio'})));
 }
@@ -745,7 +745,7 @@ function showEdit(p,card,opts){
    Shows the logged-in person's own packs, what state each one is in, and a Delete button. */
 function showAccount(){
   const a=$('account');a.textContent='';document.title='My account | Skin Central';
-  a.append(el('a',{class:'btn',href:'#skins',text:'Back to all packs'}),el('h2',{text:'My account'}));
+  a.append(el('h2',{text:'My account'}));
   meP.then(me=>{
     if(!me.loggedIn){
       a.append(el('p',{text:'Log in with Discord to see your account.'}),el('a',{class:'btn',href:'/auth/login',text:'Log in with Discord'}));
