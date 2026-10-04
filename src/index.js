@@ -242,6 +242,7 @@ function packView(r) {
     date: new Date(r.created_at * 1000).toISOString().slice(0, 10),
     tags: JSON.parse(r.tags || "[]"),
     description: r.description,
+    downloads: r.downloads || 0,
     icon: `/files/${r.id}/icon`,
     images: images.map((n) => `/files/${r.id}/${n}`),
     files: files.map((f) => ({
@@ -882,7 +883,7 @@ async function editPack(request, env) {
 }
 
 /* ---------- file downloads (from R2) ---------- */
-async function serveFile(request, env, url) {
+async function serveFile(request, env, url, ctx) {
   // paths look like /files/<id>/icon or /files/<id>/<platform>/<filename>
   const parts = url.pathname.split("/");
   const id = parts[2] || "";
@@ -932,6 +933,13 @@ async function serveFile(request, env, url) {
     headers.set("Content-Type", "application/octet-stream");
     headers.set("Content-Disposition", `attachment; filename="${b}"`);
   }
+  // plain download count: every pack file download on an approved pack adds 1
+  // (images dont count, and neither do resumed/partial downloads)
+  if (!isImage && row.status === "approved" && !request.headers.get("Range")) {
+    ctx.waitUntil(
+      env.DB.prepare("UPDATE packs SET downloads = downloads + 1 WHERE id = ?").bind(id).run().catch(() => {})
+    );
+  }
   return new Response(obj.body, { headers });
 }
 
@@ -957,7 +965,7 @@ async function route(request, env, ctx) {
   if (p === "/api/admin/report-close" && m === "POST") return closeReport(request, env);
     if (p === "/api/admin/all" && m === "GET") return adminAll(request, env);
   if (p === "/api/admin/edit" && m === "POST") return editPack(request, env);
-  if (p.startsWith("/files/") && m === "GET") return serveFile(request, env, url);
+  if (p.startsWith("/files/") && m === "GET") return serveFile(request, env, url, ctx);
 
   if (
     p.startsWith("/api/") || p.startsWith("/auth/") ||
