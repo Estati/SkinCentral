@@ -158,7 +158,7 @@ footer{margin-top:8px;font-size:var(--t);color:#cfc8bf;text-shadow:2px 2px 0 #00
   <div class="row">
     <a class="btn" href="#skins">Browse packs</a>
     <a class="btn" href="#/upload">Upload a pack</a>
-    <a class="btn" href="#/tutorials">Tutorials</a>
+    <a class="btn" href="#/tutorials">Tutorials and Tools</a>
     <a class="btn" href="#/rules">Rules</a>
     <a class="btn" href="https://discord.gg/atQA5ecyxj">Join the Discord</a>
     <a class="btn" id="login" href="/auth/login">Log in with Discord</a>
@@ -619,12 +619,16 @@ const TUTORIALS=[
   ['Wii U tutorial on YouTube','https://www.youtube.com/watch?v=AakdZGOzMoY']
 ];
 function showTutorials(){
-  const t=$('tutorials');t.textContent='';document.title='Tutorials | Skin Central';
-  t.append(el('a',{class:'btn',href:'#skins',text:'Back to all packs'}),el('h2',{text:'Tutorials'}),
+  const t=$('tutorials');t.textContent='';document.title='Tutorials and Tools | Skin Central';
+  t.append(el('a',{class:'btn',href:'#skins',text:'Back to all packs'}),el('h2',{text:'Tutorials and Tools'}),
+    el('h3',{text:'Tutorials'}),
     el('p',{class:'hint',text:'Video guides on YouTube. They open in a new tab.'}));
   const g=el('div',{class:'dl'});
   TUTORIALS.forEach(x=>g.append(el('a',{class:'btn',href:x[1],target:'_blank',rel:'noopener noreferrer',text:x[0]})));
-  t.append(g);
+  t.append(g,
+    el('h3',{text:'Tools'}),
+    el('p',{class:'hint',text:'A community-made tool for editing Legacy Console Edition pack files. It is made by its own authors, not by Skin Central. The download opens in a new tab.'}),
+    el('div',{class:'dl'},el('a',{class:'btn',href:'https://gamebanana.com/dl/985300',target:'_blank',rel:'noopener noreferrer',text:'Download PCK Studio'})));
 }
 
 /* A small "are you sure?" popup. onYes() runs only if they press the yes button. */
