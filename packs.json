@@ -1,33 +1,5 @@
 [
   {
-    "slug": "youtuber-skin-pack",
-    "name": "Youtuber Skin Pack",
-    "creator": "Skin Central",
-    "date": "2026-10-03",
-    "tags": [
-      "youtuber",
-      "skins",
-      "pck"
-    ],
-    "description": "A YouTuber-themed skin pack for Minecraft Legacy Console Edition. Pick your platform below.",
-    "icon": null,
-    "images": [],
-    "files": [
-      {
-        "platform": "Xbox 360",
-        "href": "downloads/xbox360/Youtuber_Pack",
-        "size": "84 KB"
-      },
-      {
-        "platform": "Wii U",
-        "href": "downloads/wiiu/Youtuber_Pack_WiiU.zip",
-        "size": "23 KB"
-      },
-      {
-        "platform": "PS Vita",
-        "href": "downloads/vita/Youtuber_Pack_Vita.zip",
-        "size": "22 KB"
-      }
-    ]
+
   }
 ]
