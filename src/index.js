@@ -632,6 +632,50 @@ async function setUserBan(request, env) {
   return json({ ok: true, banned });
 }
 
+// GET /api/admin/log  -> the last 100 owner/admin actions
+async function adminLog(request, env) {
+  const s = await readSession(env, request);
+  if (!isAdmin(s)) return json({ error: "Admins only." }, 403);
+  const { results } = await env.DB.prepare(
+    "SELECT actor_name, action, target, detail, created_at FROM mod_log ORDER BY id DESC LIMIT 100"
+  ).all();
+  return json({
+    log: (results || []).map((r) => ({
+      actor: r.actor_name,
+      action: r.action,
+      target: r.target,
+      detail: r.detail || "",
+      created: r.created_at,
+    })),
+  });
+}
+
+// GET /api/admin/stats  -> site numbers for the owner panel
+async function adminStats(request, env) {
+  const s = await readSession(env, request);
+  if (!isAdmin(s)) return json({ error: "Admins only." }, 403);
+  // a missing table just counts as 0 instead of breaking the whole box
+  const one = async (sql) => {
+    try {
+      const r = await env.DB.prepare(sql).first();
+      return r ? r.n || 0 : 0;
+    } catch {
+      return 0;
+    }
+  };
+  const [users, approved, pending, denied, downloads, likes, comments, reports] = await Promise.all([
+    one("SELECT COUNT(*) AS n FROM users"),
+    one("SELECT COUNT(*) AS n FROM packs WHERE status = 'approved'"),
+    one("SELECT COUNT(*) AS n FROM packs WHERE status = 'pending'"),
+    one("SELECT COUNT(*) AS n FROM packs WHERE status = 'denied'"),
+    one("SELECT COALESCE(SUM(downloads), 0) AS n FROM packs"),
+    one("SELECT COUNT(*) AS n FROM likes"),
+    one("SELECT COUNT(*) AS n FROM comments"),
+    one("SELECT COUNT(*) AS n FROM reports WHERE status = 'open'"),
+  ]);
+  return json({ users, approved, pending, denied, downloads, likes, comments, reports });
+}
+
 /* ---------- packs ---------- */
 // turns a database row into the same shape as packs.json
 function packView(r) {
@@ -1591,6 +1635,8 @@ async function route(request, env, ctx) {
   if (p === "/api/admin/users" && m === "GET") return adminUsers(request, env, url);
   if (p === "/api/admin/user-role" && m === "POST") return setUserRole(request, env);
   if (p === "/api/admin/user-ban" && m === "POST") return setUserBan(request, env);
+  if (p === "/api/admin/log" && m === "GET") return adminLog(request, env);
+  if (p === "/api/admin/stats" && m === "GET") return adminStats(request, env);
   if (p === "/admin/setup" && m === "GET") return setupShow(env);
   if (p === "/admin/setup" && m === "POST") return setupSubmit(request, env);
   if (p === "/api/packs" && m === "GET") return listPacks(env);
