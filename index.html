@@ -248,10 +248,9 @@ function el(tag,attrs,...kids){
 function add(parent,...kids){kids.forEach(k=>k&&parent.appendChild(k));return parent}
 // "1 download" / "5 downloads"
 function countText(n,word){return n+' '+word+(n===1?'':'s')}
-// creator name, links to their discord profile if we have their id
+// creator name, plain text for now (links to profile pages come later)
 function creatorLink(p){
-  if(!p.creatorId||!/^\d{15,25}$/.test(String(p.creatorId)))return el('span',{text:p.creator});
-  return el('a',{class:'creator',href:'https://discord.com/users/'+p.creatorId,target:'_blank',rel:'noopener noreferrer',title:'Open their Discord profile',text:p.creator});
+  return el('span',{text:p.creator});
 }
 function icon(p,cls){
   if(p.icon)return el('img',{src:p.icon,alt:'',class:'icon '+(cls||'')});
@@ -271,7 +270,7 @@ const PLATFORM_ICONS={
 };
 function pIcon(name){const src=PLATFORM_ICONS[name];if(!src)return null;const i=el('img',{src,alt:'',class:'picon',title:name});i.addEventListener('error',()=>i.remove());return i}
 
-/* likes + comments on a pack page (need discord login to like or comment) */
+/* likes + comments on a pack page (need a login to like or comment) */
 function socialBox(p){
   const box=el('div',{class:'social'});
   const likeBtn=el('button',{class:'btn',type:'button',text:'Like'});
@@ -308,7 +307,7 @@ function socialBox(p){
     }).catch(()=>{list.textContent='Could not load comments.'});
   }
   likeBtn.addEventListener('click',async()=>{
-    if(!me.loggedIn){say('Log in with Discord to like packs.');return}
+    if(!me.loggedIn){say('Log in to like packs.');return}
     likeBtn.disabled=true;
     try{
       const r=await post('/api/like',{id:p.id,like:!state.liked});
@@ -320,7 +319,9 @@ function socialBox(p){
   meP.then(m=>{
     me=m;
     if(!m.loggedIn){
-      compose.append(el('p',{class:'hint',text:'Log in with Discord to like and comment.'}),el('a',{class:'btn',href:'/auth/login',text:'Log in with Discord'}));
+      const liBtn=el('button',{class:'btn',type:'button',text:'Log in'});
+      liBtn.addEventListener('click',()=>showAuth('login'));
+      compose.append(el('p',{class:'hint',text:'Log in to like and comment.'}),liBtn);
       return;
     }
     const text=el('textarea',{maxlength:'300',placeholder:'Write a comment (300 characters max)','aria-label':'Comment'});
@@ -342,7 +343,7 @@ function socialBox(p){
   return box;
 }
 
-/* report button, sends a report to the mods (needs discord login) */
+/* report button, sends a report to the mods (needs a login) */
 function reportBox(p){
   const box=el('div',{class:'reportbox'});
   const toggle=el('button',{class:'btn',type:'button',text:'Report this pack'});
@@ -350,13 +351,13 @@ function reportBox(p){
   const why=el('textarea',{maxlength:'300',placeholder:'What is wrong? (stolen or ripped content, NSFW content, unsafe file, something else)','aria-label':'Why are you reporting this pack?'});
   const send=el('button',{class:'btn',type:'button',text:'Send report'});
   const msg=el('p',{class:'msg',role:'status'});
-  form.append(el('p',{class:'hint',text:'Reports go to the moderators. You need to be logged in with Discord.'}),why,send,msg);
+  form.append(el('p',{class:'hint',text:'Reports go to the moderators. You need to be logged in.'}),why,send,msg);
   box.append(toggle,form);
   toggle.addEventListener('click',()=>{form.hidden=!form.hidden});
   send.addEventListener('click',async()=>{
     msg.className='msg';msg.textContent='';
     const me=await meP;
-    if(!me.loggedIn){msg.className='msg err';msg.textContent='Log in with Discord first (button at the top of the page).';return}
+    if(!me.loggedIn){msg.className='msg err';msg.textContent='Log in first (button at the top of the page).';return}
     const reason=why.value.trim();
     if(reason.length<5){msg.className='msg err';msg.textContent='Please say what is wrong (at least 5 characters).';return}
     send.disabled=true;
@@ -548,13 +549,15 @@ function showUpload(){
 
   meP.then(me=>{
     if(me.loggedIn){buildForm(false);return}
-    // not logged in: pick discord login or anon upload
+    // not logged in: pick log in or anon upload
     const gate=el('div',{});
     const anonBtn=el('button',{class:'btn',type:'button',text:'Upload without logging in'});
+    const loginBtn=el('button',{class:'btn',type:'button',text:'Log in'});
+    loginBtn.addEventListener('click',()=>showAuth('login'));
     anonBtn.addEventListener('click',()=>askAnon(()=>{gate.remove();buildForm(true)}));
     gate.append(
-      el('p',{text:'Log in with Discord to upload under your name, or upload without logging in.'}),
-      el('div',{class:'dl'},el('a',{class:'btn',href:'/auth/login',text:'Log in with Discord'}),anonBtn));
+      el('p',{text:'Log in to upload under your name, or upload without logging in.'}),
+      el('div',{class:'dl'},loginBtn,anonBtn));
     u.append(gate);
   });
 }
@@ -578,7 +581,7 @@ function adminCard(p,act,tools){
     p.anonymous?el('p',{class:'callout',text:'Anonymous upload (no login)'}):null,
     el('div',{class:'head'},icon(p),el('div',{},
       el('h3',{text:p.name}),
-      el('p',{class:'by',text:p.anonymous?'By Anonymous (visitor tag '+(p.visitorTag||'unknown')+'), '+p.date:'By '+p.creator+' (Discord ID '+p.creatorId+'), '+p.date}),
+      el('p',{class:'by',text:p.anonymous?'By Anonymous (visitor tag '+(p.visitorTag||'unknown')+'), '+p.date:'By '+p.creator+' (account ID '+p.creatorId+'), '+p.date}),
       el('p',{class:'tags',text:p.tags.join(', ')}))),
     el('p',{class:'desc',text:p.description||'(no description)'}),
     p.denyReason?el('p',{class:'by',text:'Denied: '+p.denyReason}):null,
@@ -593,7 +596,7 @@ function reportCard(r,act,close){
   mk('Close report',()=>close(r.id));
   return el('div',{class:'card admin'},
     el('h3',{text:'Report: '+r.packName}),
-    el('p',{class:'by',text:'By '+r.reporter+' (Discord ID '+r.reporterId+'), '+r.date}),
+    el('p',{class:'by',text:'By '+r.reporter+' (account ID '+r.reporterId+'), '+r.date}),
     el('p',{class:'desc',text:r.reason}),
     r.packId?null:el('p',{class:'hint',text:'This is a built-in pack. To remove it, delete its entry from packs.json.'}),
     btns);
@@ -696,7 +699,7 @@ function showRules(){
   RULES.forEach((x,i)=>r.append(el('h3',{text:(i+1)+'. '+x[0]}),el('p',{text:x[1]})));
   r.append(el('h2',{text:'Reports and takedowns'}),
     el('h3',{text:'To report a pack'}),
-    el('p',{text:'Open the pack, press "Report this pack", log in with Discord and tell us what is wrong. You can send up to 5 reports a day.'}),
+    el('p',{text:'Open the pack, press "Report this pack", log in and tell us what is wrong. You can send up to 5 reports a day.'}),
     el('h3',{text:'What happens next'}),
     el('p',{text:'Moderators look at the report, then either take the pack down or close the report.'}),
     el('h3',{text:'Creators'}),
@@ -1205,7 +1208,9 @@ function showAccount(){
   a.append(el('h2',{text:'My account'}));
   meP.then(me=>{
     if(!me.loggedIn){
-      a.append(el('p',{text:'Log in with Discord to see your account.'}),el('a',{class:'btn',href:'/auth/login',text:'Log in with Discord'}));
+      const liBtn=el('button',{class:'btn',type:'button',text:'Log in'});
+      liBtn.addEventListener('click',()=>showAuth('login'));
+      a.append(el('p',{text:'Log in to see your account.'}),liBtn);
       return;
     }
     const list=el('div',{text:'Loading...'});
@@ -1329,7 +1334,7 @@ function showAuth(mode){
       signup?el('label',{text:'Repeat password'}):null,pass2,
       tsBox,msg,
       el('div',{class:'dl'},go,cancel),
-      el('div',{class:'dl'},swap,signup?null:el('a',{class:'btn',href:'/auth/login',text:'Log in with Discord (old accounts)'}))));
+      el('div',{class:'dl'},swap)));
   ov.addEventListener('click',e=>{if(e.target===ov)close()});
   document.addEventListener('keydown',esc);
   document.body.append(ov);
@@ -1350,12 +1355,7 @@ meP.then(me=>{
   }
   // account card, later this can show a custom pic + display name + bio
   const initial=()=>el('span',{class:'ph',text:(me.user.name||'?').charAt(0).toUpperCase()});
-  let pic=initial();
-  if(me.user.avatar){
-    const im=el('img',{src:'https://cdn.discordapp.com/avatars/'+me.user.id+'/'+me.user.avatar+'.png?size=64',alt:''});
-    im.addEventListener('error',()=>im.replaceWith(initial()));
-    pic=im;
-  }
+  const pic=initial();
   bar.append(
     el('a',{class:'acct',href:'#/account',title:'My account'},pic,
       el('span',{class:'who'},el('span',{text:me.user.name}),el('small',{text:me.role==='owner'?'Owner':me.role==='admin'?'Admin':me.isMod?'Moderator':'My account'}))),
