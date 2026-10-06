@@ -4,12 +4,12 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Skin Central: Legacy Console Edition</title>
-<meta name="description" content="Download Legacy Console Edition skins.">
+<meta name="description" content="Download community-made Legacy Console Edition skin packs and texture packs.">
 <!-- the card that shows up when the link gets sent (discord etc) -->
 <meta property="og:type" content="website">
 <meta property="og:site_name" content="Skin Central">
 <meta property="og:title" content="Skin Central: Legacy Console Edition">
-<meta property="og:description" content="Download community-made Minecraft Legacy Console Edition skin packs and Xbox 360 DLC. Join the Discord and share your own!">
+<meta property="og:description" content="Download community-made Minecraft Legacy Console Edition skin packs, texture packs and Xbox 360 DLC. Join the Discord and share your own!">
 <meta property="og:url" content="https://skincentral.estatic.cc/">
 <meta property="og:image" content="https://skincentral.estatic.cc/images/favicon.png">
 <meta property="og:image:width" content="241">
@@ -198,7 +198,7 @@ footer{margin-top:8px;font-size:var(--t);color:#cfc8bf;text-shadow:2px 2px 0 #00
     <div class="acctbar" id="acctbar"></div>
   </div>
   <h1><img class="logo" src="images/logo.png" alt="Skin Central" width="1290" height="168"><span class="splash">Now with sound!</span></h1>
-  <p class="sub">Legacy Console Edition skins, one click away.</p>
+  <p class="sub">Community skin packs and texture packs for Legacy Console Edition.</p>
 
   <div class="row">
     <a class="btn" href="#skins">Browse packs</a>
@@ -1576,7 +1576,8 @@ function showProfile(name){
     const role=u.role==='owner'?'Owner':u.role==='admin'?'Admin':u.role==='mod'?'Moderator':'';
     const edit=mine?el('button',{class:'btn',type:'button',text:'Edit profile'}):null;
     if(edit)edit.addEventListener('click',()=>showEditProfile(u));
-    pr.append(
+    // add() skips nulls, plain append() would print the word "null" for empty bios
+    add(pr,
       el('div',{class:'head'},bigAvatar(u),el('div',{},
         el('h2',{text:u.displayName||u.username}),
         u.displayName?el('p',{class:'by',text:'@'+u.username}):null,
