@@ -782,7 +782,7 @@ function showOwner(){
     if(me.role==='owner'){heading.textContent='Owner panel';document.title='Owner panel | Skin Central'}
 
     // sub menus: one section shows at a time. accounts, log and site reload each time you open them
-    const tabNames=[['accounts','Accounts'],['move','Move packs'],['news','Announcements'],['log','Mod log'],['site','Site']];
+    const tabNames=[['accounts','Accounts'],['move','Pack owners'],['news','Announcements'],['log','Mod log'],['site','Site']];
     const tabbar=el('div',{class:'tabs',role:'group','aria-label':'Panel sections'});
     const secs={},tabBtns={};
     const loaders={
@@ -941,7 +941,7 @@ function ownerUsers(o,me){
   q.addEventListener('keydown',e=>{if(e.key==='Enter')load()});
   o.append(
     el('h3',{text:'Accounts'}),
-    el('p',{class:'hint',text:'Everyone who signed up on the site. Moderators can review, edit and delete packs. Admins can do almost everything the owner can, except change the owner or other admins. Banned accounts are logged out right away. Old Discord logins are not listed here.'}),
+    el('p',{class:'hint',text:'Everyone who signed up on the site. Moderators can review, edit and delete packs. Admins can do almost everything the owner can, except change the owner or other admins. Banned accounts are logged out right away.'}),
     q,el('div',{class:'dl'},go),msg,list);
   load();
 }
@@ -950,7 +950,6 @@ function ownerUsers(o,me){
 function ownerMove(o){
   const msg=el('p',{class:'msg',role:'status'});
   const say=(t,ok)=>{msg.className='msg '+(ok?'ok':'err');msg.textContent=t};
-  const oldList=el('div',{class:'userlist'});
   const q=el('input',{type:'text',maxlength:'40','aria-label':'Search packs',placeholder:'Search by pack or creator name'});
   const packList=el('div',{class:'userlist'});
   let allPacks=[];
@@ -960,38 +959,6 @@ function ownerMove(o){
     const j=await r.json().catch(()=>({}));
     if(!r.ok||!j.ok)throw new Error(j.error||'That did not work.');
     return j;
-  }
-
-  // old discord accounts that still own stuff
-  async function loadOld(){
-    try{
-      const r=await fetch('/api/admin/legacy',{cache:'no-store'});
-      const d=await r.json().catch(()=>({}));
-      if(!r.ok)return say(d.error||'Could not load the old accounts.');
-      oldList.textContent='';
-      if(!d.accounts.length)oldList.append(el('p',{class:'hint',text:'Nothing left to move. No old Discord accounts have packs, comments or likes.'}));
-      d.accounts.forEach(u=>{
-        const bits=[];
-        if(u.packs)bits.push(u.packs+(u.packs===1?' pack':' packs'));
-        if(u.comments)bits.push(u.comments+(u.comments===1?' comment':' comments'));
-        if(u.likes)bits.push(u.likes+(u.likes===1?' like':' likes'));
-        const b=el('button',{class:'btn',type:'button',text:'Move to an account'});
-        b.addEventListener('click',()=>askUsername(
-          'Move everything?',
-          'All of '+(u.name||'this person')+'\'s packs, comments and likes ('+bits.join(', ')+') will move to the account you type below. Check the username carefully.',
-          'Yes, move it',
-          async name=>{
-            try{const j=await post('/api/admin/migrate',{from:u.id,to:name});
-              say('Moved '+j.moved.packs+' packs, '+j.moved.comments+' comments and '+j.moved.likes+' likes to '+name+'.',true);
-              refreshPacks();loadOld();loadPacks()}
-            catch(e){say(e.message)}
-          }));
-        oldList.append(el('div',{class:'card admin'},
-          el('span',{class:'name',text:u.name||'Unknown name'}),
-          el('small',{text:'Discord ID '+u.id+' - '+bits.join(', ')}),
-          el('div',{class:'dl'},b)));
-      });
-    }catch{say('Network problem. Try again.')}
   }
 
   // any single pack, including anonymous ones
@@ -1007,7 +974,7 @@ function ownerMove(o){
         '"'+p.name+'" is owned by '+(p.anonymous?'Anonymous':p.creator)+'. Type the site username that should own it now.',
         'Yes, change it',
         async name=>{
-          try{await post('/api/admin/pack-owner',{id:p.id,to:name});say('"'+p.name+'" now belongs to '+name+'.',true);refreshPacks();loadOld();loadPacks()}
+          try{await post('/api/admin/pack-owner',{id:p.id,to:name});say('"'+p.name+'" now belongs to '+name+'.',true);refreshPacks();loadPacks()}
           catch(e){say(e.message)}
         }));
       packList.append(el('div',{class:'card admin'},
@@ -1027,16 +994,12 @@ function ownerMove(o){
 
   q.addEventListener('input',paintPacks);
   o.append(
-    el('h3',{text:'Move packs'}),
-    el('p',{class:'hint',text:'Old Discord logins are being replaced by site accounts. Ask the person to sign up first, then move their stuff to their new account here. Everything is recorded in the mod log.'}),
+    el('h3',{text:'Pack owners'}),
     msg,
-    el('h3',{text:'Old Discord accounts'}),
-    el('p',{class:'hint',text:'Moves all of that person\'s packs, comments and likes in one go.'}),
-    oldList,
     el('h3',{text:'Change who owns a pack'}),
     el('p',{class:'hint',text:'Pick any single pack, including anonymous ones. Shows the newest 200 packs, use the search to find one.'}),
     q,packList);
-  loadOld();loadPacks();
+  loadPacks();
 }
 
 /* ---------- owner panel: mod log ---------- */
