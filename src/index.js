@@ -840,6 +840,7 @@ function packView(r) {
     date: new Date(r.created_at * 1000).toISOString().slice(0, 10),
     tags: JSON.parse(r.tags || "[]"),
     description: r.description,
+    type: r.type === "texture" ? "texture" : "skin",   // old packs have no type, they are skins
     downloads: r.downloads || 0,
     likes: r.like_count || 0,
     icon: `/files/${r.id}/icon`,
@@ -1211,6 +1212,8 @@ async function submit(request, env, ctx) {
   const name = clean(form.get("name"), 40);
   const description = clean(form.get("description"), 500);
   if (name.length < 3) return json({ error: "Pack name must be at least 3 characters." }, 400);
+  // skin pack or texture pack, anything else counts as skin
+  const packType = form.get("type") === "texture" ? "texture" : "skin";
 
   const tags = [];
   for (const t of clean(form.get("tags"), 200).split(",")) {
@@ -1275,11 +1278,11 @@ async function submit(request, env, ctx) {
     }
     await env.DB.prepare(
       `INSERT INTO packs
-       (id, slug, name, description, tags, creator_id, creator_name, status, icon_key, images, files, created_at, ip_hash)
-       VALUES (?, ?, ?, ?, ?, ?, ?, 'pending', 'icon', ?, ?, ?, ?)`
+       (id, slug, name, description, tags, creator_id, creator_name, status, icon_key, images, files, created_at, ip_hash, type)
+       VALUES (?, ?, ?, ?, ?, ?, ?, 'pending', 'icon', ?, ?, ?, ?, ?)`
     ).bind(
       id, slug, name, description, JSON.stringify(tags), s.id, clean(s.name, 60),
-      JSON.stringify(images), JSON.stringify(files), Math.floor(Date.now() / 1000), visitor
+      JSON.stringify(images), JSON.stringify(files), Math.floor(Date.now() / 1000), visitor, packType
     ).run();
   } catch (e) {
     await Promise.allSettled(done.map((k) => env.FILES.delete(k)));
@@ -1292,7 +1295,7 @@ async function submit(request, env, ctx) {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          content: `<@&${env.MOD_ROLE_ID}> A new pack is waiting for review.`,
+          content: `<@&${env.MOD_ROLE_ID}> A new ${packType === "texture" ? "texture pack" : "skin pack"} is waiting for review.`,
           allowed_mentions: { roles: [env.MOD_ROLE_ID] },
           embeds: [{
             title: name,
@@ -1301,6 +1304,7 @@ async function submit(request, env, ctx) {
             color: 0x8f8f8f,
             fields: [
               { name: "By", value: anon ? "Anonymous (no login)" : (clean(s.name, 60) || "unknown") },
+              { name: "Type", value: packType === "texture" ? "Texture pack" : "Skin pack" },
               { name: "Platforms", value: files.map((f) => f.platform).join(", ") },
             ],
           }],
