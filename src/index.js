@@ -1071,21 +1071,54 @@ const DEFAULT_NEWS = {
     "You can upload without logging in.",
     "The new Tools page has PCK Studio and the tutorials.",
   ],
+  image: false,
 };
+const NEWS_IMAGE_KEY = "site/news-image"; // the banner image lives in R2 under this key
+const NEWS_IMAGE_MAX = 1024 * 1024;       // 1 MB
+
+// reads the saved announcements + when they last changed (0 = never edited)
+async function newsRow(env) {
+  try {
+    const row = await env.DB.prepare("SELECT value, updated_at FROM settings WHERE key = 'news'").first();
+    if (row) {
+      const v = JSON.parse(row.value);
+      if (v && Array.isArray(v.items)) return { v, updated: row.updated_at };
+    }
+  } catch {}
+  return { v: DEFAULT_NEWS, updated: 0 };
+}
+
+// saves the announcements, returns the new "last changed" time
+async function writeNews(env, v, userId) {
+  const now = Math.floor(Date.now() / 1000);
+  await env.DB.prepare(
+    `INSERT INTO settings (key, value, updated_at, updated_by) VALUES ('news', ?, ?, ?)
+     ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at, updated_by = excluded.updated_by`
+  ).bind(JSON.stringify(v), now, userId).run();
+  return now;
+}
 
 // anyone can read the announcements
 async function getNews(env) {
-  try {
-    const row = await env.DB.prepare("SELECT value FROM settings WHERE key = 'news'").first();
-    if (row) {
-      const v = JSON.parse(row.value);
-      if (v && Array.isArray(v.items)) return json(v);
-    }
-  } catch {}
-  return json(DEFAULT_NEWS);
+  const { v, updated } = await newsRow(env);
+  return json({ title: v.title, intro: v.intro, items: v.items, image: !!v.image, updated });
 }
 
-// save the announcements (mods for now, owner only once the owner account exists)
+// anyone can see the banner image
+async function newsImage(env) {
+  const obj = await env.FILES.get(NEWS_IMAGE_KEY);
+  if (!obj) return notFound();
+  return new Response(obj.body, {
+    headers: {
+      "Content-Type": obj.httpMetadata?.contentType || "image/png",
+      "Cache-Control": "public, max-age=3600", // the page adds ?v=<time> so a new image shows up right away
+      "X-Content-Type-Options": "nosniff",
+      "Content-Security-Policy": "default-src 'none'; sandbox",
+    },
+  });
+}
+
+// save the announcement text (mods for now, owner only once the owner account exists)
 async function saveNews(request, env) {
   const s = await readSession(env, request);
   if (!s || !s.mod) return json({ error: "Moderators only." }, 403);
@@ -1103,12 +1136,40 @@ async function saveNews(request, env) {
     .map((t) => clean(t, 120))
     .filter(Boolean)
     .slice(0, 12);
-  const value = JSON.stringify({ title, intro, items });
-  await env.DB.prepare(
-    `INSERT INTO settings (key, value, updated_at, updated_by) VALUES ('news', ?, ?, ?)
-     ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at, updated_by = excluded.updated_by`
-  ).bind(value, Math.floor(Date.now() / 1000), s.id).run();
-  return json({ ok: true, title, intro, items });
+  const cur = await newsRow(env); // keep whatever banner image is already set
+  const updated = await writeNews(env, { title, intro, items, image: !!cur.v.image }, s.id);
+  return json({ ok: true, title, intro, items, image: !!cur.v.image, updated });
+}
+
+// change or remove the banner image (multipart: "file", or remove=1)
+async function saveNewsImage(request, env) {
+  const s = await readSession(env, request);
+  if (!s || !s.mod) return json({ error: "Moderators only." }, 403);
+  if (!sameOrigin(request, env)) return json({ error: "Bad origin." }, 403);
+  if (Number(request.headers.get("Content-Length") || 0) > NEWS_IMAGE_MAX + 64 * 1024) {
+    return json({ error: "That image is too big (max 1 MB)." }, 413);
+  }
+  let form;
+  try {
+    form = await request.formData();
+  } catch {
+    return json({ error: "Bad request." }, 400);
+  }
+  const cur = await newsRow(env);
+  const v = { title: cur.v.title, intro: cur.v.intro, items: cur.v.items, image: false };
+  if (form.get("remove") === "1") {
+    await env.FILES.delete(NEWS_IMAGE_KEY);
+  } else {
+    const f = form.get("file");
+    if (!isFile(f)) return json({ error: "Choose an image first." }, 400);
+    if (f.size > NEWS_IMAGE_MAX) return json({ error: "That image is too big (max 1 MB)." }, 400);
+    const type = await sniffImage(f);
+    if (!type) return json({ error: "The image must be a PNG, JPG or WebP." }, 400);
+    await env.FILES.put(NEWS_IMAGE_KEY, await f.arrayBuffer(), { httpMetadata: { contentType: type } });
+    v.image = true;
+  }
+  const updated = await writeNews(env, v, s.id);
+  return json({ ok: true, image: v.image, updated });
 }
 
 /* ---------- router ---------- */
@@ -1125,7 +1186,9 @@ async function route(request, env, ctx) {
   if (p === "/api/my" && m === "GET") return myPacks(request, env);
   if (p === "/api/social" && m === "GET") return packSocial(request, env, url);
   if (p === "/api/news" && m === "GET") return getNews(env);
+  if (p === "/api/news/image" && m === "GET") return newsImage(env);
   if (p === "/api/admin/news" && m === "POST") return saveNews(request, env);
+  if (p === "/api/admin/news-image" && m === "POST") return saveNewsImage(request, env);
   if (p === "/api/like" && m === "POST") return setLike(request, env);
   if (p === "/api/comment" && m === "POST") return addComment(request, env);
   if (p === "/api/comment/delete" && m === "POST") return deleteComment(request, env);
