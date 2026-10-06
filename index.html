@@ -975,6 +975,18 @@ function ownerUsers(o,me){
     return b;
   }
 
+  // owner only. asks them to type the username, then the worker deletes the account
+  function deleteBtn(u){
+    const b=el('button',{class:'btn',type:'button',text:'Delete account'});
+    b.addEventListener('click',()=>askUsername('Delete '+u.username+' for good?',
+      'Their account, likes, comments and profile picture are deleted. Their packs stay up as "Deleted user". This cannot be undone. Type '+u.username+' to confirm.',
+      'Yes, delete it',async typed=>{
+        try{await post('/api/admin/user-delete',{id:u.id,confirm:typed});load();say('Deleted '+u.username+'.',true)}
+        catch(e){say(e.message)}
+      }));
+    return b;
+  }
+
   function row(u){
     const label=u.role==='owner'?'Owner':u.role==='admin'?'Admin':u.role==='mod'?'Moderator':'User';
     const joined=new Date(u.created*1000).toISOString().slice(0,10);
@@ -984,6 +996,7 @@ function ownerUsers(o,me){
     const locked=u.role==='owner'||(u.role==='admin'&&me.role!=='owner');
     if(!locked){
       add(btns,resetBtn(u));
+      if(me.role==='owner')add(btns,deleteBtn(u));
       if(u.banned){
         add(btns,mk('Unban','Unban '+u.username+'?','They will be able to log in again as a normal user.','Yes, unban',B,{id:u.id,banned:false}));
       }else{
