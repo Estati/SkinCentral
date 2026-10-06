@@ -81,9 +81,9 @@ input[type=search]:focus{outline:3px solid var(--gold)}
 .shots{display:grid;grid-template-columns:repeat(auto-fill,minmax(200px,1fr));gap:12px}
 .shots img{width:100%;image-rendering:pixelated;border:3px solid #000}
 label{display:block;margin:16px 0 8px}
-input[type=text],textarea{width:100%;font:inherit;font-size:var(--b);color:#fff;background:#000;padding:8px 12px;border:3px solid #6d6d6d}
+input[type=text],input[type=password],textarea{width:100%;font:inherit;font-size:var(--b);color:#fff;background:#000;padding:8px 12px;border:3px solid #6d6d6d}
 textarea{min-height:96px;resize:vertical}
-input[type=text]:focus,textarea:focus{outline:3px solid var(--gold)}
+input[type=text]:focus,input[type=password]:focus,textarea:focus{outline:3px solid var(--gold)}
 input[type=file]{width:100%;font:inherit;font-size:var(--t);color:#cfc8bf;background:#000;padding:8px;border:3px solid #6d6d6d}
 .hint{font-size:var(--t);color:#bdb5ac;margin:0 0 8px}
 .msg{margin:16px 0 0;font-size:var(--b);overflow-wrap:break-word}
@@ -110,7 +110,8 @@ input[type=file]{width:100%;font:inherit;font-size:var(--t);color:#cfc8bf;backgr
 .panel .card .name{color:#202020}
 /* account card top right (only when logged in) */
 .topbar{display:flex;justify-content:space-between;align-items:flex-start;gap:12px;margin-bottom:8px}
-.acctbar{display:flex;justify-content:flex-end;margin-left:auto}
+.acctbar{display:flex;flex-direction:column;align-items:flex-end;gap:8px;margin-left:auto}
+.authbtns{display:flex;gap:8px}
 .btn.annbtn{flex:none;position:relative;width:48px;height:48px;min-width:0;padding:0;display:flex;align-items:center;justify-content:center}
 .newdot{position:absolute;top:-8px;right:-8px;width:16px;height:16px;background:#d83030;border:3px solid #000}
 /* dark inset box (text in the whats new popup) + banner image */
@@ -166,7 +167,6 @@ footer{margin-top:8px;font-size:var(--t);color:#cfc8bf;text-shadow:2px 2px 0 #00
     <a class="btn" href="#/tutorials">Tools</a>
     <a class="btn" href="#/rules">Rules</a>
     <a class="btn" href="https://discord.gg/atQA5ecyxj">Join the Discord</a>
-    <a class="btn" id="login" href="/auth/login">Log in with Discord</a>
   </div>
 
   <section class="panel" id="skins">
@@ -1022,14 +1022,74 @@ $('refresh').addEventListener('click',()=>{
   loadPacks(true).then(()=>{b.textContent='Refreshed!';setTimeout(()=>{b.textContent='Refresh'},1500)});
 });
 
-/* ---------- discord login ----------
-   asks the worker whos logged in, if someone is the button turns into log out */
+/* ---------- log in / sign up popup ---------- */
+function showAuth(mode){
+  const signup=mode==='signup';
+  const esc=e=>{if(e.key==='Escape')close()};
+  const close=()=>{ov.remove();document.removeEventListener('keydown',esc)};
+  const user=el('input',{type:'text',maxlength:'20',autocomplete:'username','aria-label':'Username'});
+  const pass=el('input',{type:'password',maxlength:'128',autocomplete:signup?'new-password':'current-password','aria-label':'Password'});
+  const pass2=signup?el('input',{type:'password',maxlength:'128',autocomplete:'new-password','aria-label':'Repeat password'}):null;
+  const tsBox=signup?el('div',{id:'auth-ts'}):null;
+  const human=signup?mountTurnstile(tsBox):null;
+  const msg=el('p',{class:'msg',role:'status'});
+  const go=el('button',{class:'btn',type:'button',text:signup?'Create account':'Log in'});
+  const cancel=el('button',{class:'btn',type:'button',text:'Cancel'});
+  const swap=el('button',{class:'btn',type:'button',text:signup?'I already have an account':'I need an account'});
+  const bad=t=>{msg.className='msg err';msg.textContent=t};
+  async function submit(){
+    msg.className='msg';msg.textContent='';
+    if(!user.value.trim()||!pass.value)return bad('Enter a username and password.');
+    if(signup&&pass.value!==pass2.value)return bad('The two passwords do not match.');
+    const headers={'Content-Type':'application/json'};
+    if(signup){
+      const t=human.token();
+      if(!t)return bad('Please finish the human check first.');
+      headers['X-Turnstile-Token']=t;
+    }
+    go.disabled=true;msg.textContent='One moment...';
+    try{
+      const r=await fetch(signup?'/api/signup':'/api/login',{method:'POST',headers,body:JSON.stringify({username:user.value.trim(),password:pass.value})});
+      const d=await r.json().catch(()=>({}));
+      if(r.ok&&d.ok){location.reload();return}
+      bad(d.error||'That did not work.');
+    }catch{bad('Network problem. Try again.')}
+    if(signup)human.reset();   // token only works once
+    go.disabled=false;
+  }
+  go.addEventListener('click',submit);
+  [user,pass,pass2].forEach(i=>i&&i.addEventListener('keydown',e=>{if(e.key==='Enter')submit()}));
+  cancel.addEventListener('click',()=>close());
+  swap.addEventListener('click',()=>{close();showAuth(signup?'login':'signup')});
+  const ov=el('div',{class:'modal'},
+    el('div',{class:'panel',role:'dialog','aria-modal':'true','aria-labelledby':'auth-title'},
+      el('h2',{id:'auth-title',text:signup?'Create an account':'Log in'}),
+      signup?el('p',{class:'hint',text:'Pick a username (3 to 20 letters, numbers or underscores) and a password with at least 10 characters. No email needed. If you forget your password, ask the owner or a moderator on our Discord. Use a password you do not use anywhere else.'}):null,
+      el('label',{text:'Username'}),user,
+      el('label',{text:'Password'}),pass,
+      signup?el('label',{text:'Repeat password'}):null,pass2,
+      tsBox,msg,
+      el('div',{class:'dl'},go,cancel),
+      el('div',{class:'dl'},swap,signup?null:el('a',{class:'btn',href:'/auth/login',text:'Log in with Discord (old accounts)'}))));
+  ov.addEventListener('click',e=>{if(e.target===ov)close()});
+  document.addEventListener('keydown',esc);
+  document.body.append(ov);
+  user.focus();
+}
+
+/* ---------- top right: log in / sign up, or the account card + log out ----------
+   asks the worker whos logged in */
 meP.then(me=>{
-  if(!me.loggedIn)return;
-  const b=$('login');
-  b.textContent='Log out ('+me.user.name+(me.isMod?', Mod':'')+')';
-  b.setAttribute('href','/auth/logout');
-  // account card top right, later this can show a custom pic + display name + bio
+  const bar=$('acctbar');
+  if(!me.loggedIn){
+    const li=el('button',{class:'btn',type:'button',text:'Log in'});
+    const su=el('button',{class:'btn',type:'button',text:'Sign up'});
+    li.addEventListener('click',()=>showAuth('login'));
+    su.addEventListener('click',()=>showAuth('signup'));
+    bar.append(el('div',{class:'authbtns'},li,su));
+    return;
+  }
+  // account card, later this can show a custom pic + display name + bio
   const initial=()=>el('span',{class:'ph',text:(me.user.name||'?').charAt(0).toUpperCase()});
   let pic=initial();
   if(me.user.avatar){
@@ -1037,11 +1097,14 @@ meP.then(me=>{
     im.addEventListener('error',()=>im.replaceWith(initial()));
     pic=im;
   }
-  $('acctbar').append(el('a',{class:'acct',href:'#/account',title:'My account'},pic,
-    el('span',{class:'who'},el('span',{text:me.user.name}),el('small',{text:me.isMod?'Moderator':'My account'}))));
+  bar.append(
+    el('a',{class:'acct',href:'#/account',title:'My account'},pic,
+      el('span',{class:'who'},el('span',{text:me.user.name}),el('small',{text:me.isMod?'Moderator':'My account'}))),
+    el('a',{class:'btn',href:'/auth/logout',text:'Log out'}));
   if(me.isMod){
-    b.insertAdjacentElement('afterend',el('a',{class:'btn',href:'#/owner',text:'Owner panel'}));
-    b.insertAdjacentElement('afterend',el('a',{class:'btn',href:'#/admin',text:'Moderation'}));
+    document.querySelector('.row').append(
+      el('a',{class:'btn',href:'#/admin',text:'Moderation'}),
+      el('a',{class:'btn',href:'#/owner',text:'Owner panel'}));
   }
 }).catch(()=>{});
 
