@@ -604,10 +604,15 @@ function showAdmin(){
   meP.then(me=>{
     if(!me.loggedIn||!me.isMod){
       a.append(el('p',{text:me.loggedIn?'Moderators only.':'Log in with a moderator account.'}));
-      if(!me.loggedIn)a.append(el('a',{class:'btn',href:'/auth/login',text:'Log in with Discord'}));
+      if(!me.loggedIn){
+        const li=el('button',{class:'btn',type:'button',text:'Log in'});
+        li.addEventListener('click',()=>showAuth('login'));
+        a.append(li);
+      }
       return;
     }
-    const tabs=el('div',{class:'row'});
+    const tabs=el('div',{class:'tabs',role:'group','aria-label':'Moderation sections'});
+    const tabBtns={};
     const list=el('div',{});
     const msg=el('p',{class:'msg',role:'status'});
     a.append(tabs,msg,list);
@@ -651,6 +656,7 @@ function showAdmin(){
     }
     async function load(st){
       current=st;list.textContent='Loading...';
+      Object.keys(tabBtns).forEach(k=>tabBtns[k].setAttribute('aria-pressed',k===st?'true':'false'));
       let items;
       try{const r=await fetch(st==='reports'?'/api/admin/reports':'/api/admin/list?status='+st,{cache:'no-store'});items=await r.json();if(!r.ok)throw 0}
       catch{list.textContent='Could not load packs.';return}
@@ -659,8 +665,9 @@ function showAdmin(){
       items.forEach(p=>list.appendChild(st==='reports'?reportCard(p,act,closeReport):adminCard(p,act,tools)));
     }
     ['pending','approved','denied','reports'].forEach(st=>{
-      const b=el('button',{class:'btn',type:'button',text:st[0].toUpperCase()+st.slice(1)});
+      const b=el('button',{class:'btn',type:'button',text:st[0].toUpperCase()+st.slice(1),'aria-pressed':'false'});
       b.addEventListener('click',()=>{msg.textContent='';load(st)});
+      tabBtns[st]=b;
       tabs.append(b);
     });
     const rb=el('button',{class:'btn',type:'button',text:'Refresh'});
