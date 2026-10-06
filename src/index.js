@@ -234,12 +234,12 @@ async function checkPassword(env, password, stored) {
 }
 
 // reads a small json body, null if its too big or broken
-async function readJson(request) {
+async function readJson(request, max = 4096) {
   const len = Number(request.headers.get("Content-Length") || 0);
-  if (len > 4096) return null;
+  if (len > max) return null;
   try {
     const text = await request.text();
-    if (text.length > 4096) return null;
+    if (text.length > max) return null;
     const data = JSON.parse(text);
     return data && typeof data === "object" ? data : null;
   } catch {
@@ -470,7 +470,7 @@ async function resetPassword(request, env) {
 }
 
 /* ---------- splash texts (the tilted yellow text under the logo) ---------- */
-const SPLASH_MAX = 30;   // characters per splash
+const SPLASH_MAX = 50;   // characters per splash
 const SPLASH_COUNT = 60; // how many splashes
 
 // anyone can read them. custom:false means none saved, the page uses its built-in list
@@ -490,7 +490,7 @@ async function saveSplashes(request, env) {
   const s = await readSession(env, request);
   if (!isAdmin(s)) return json({ error: "Admins only." }, 403);
   if (!sameOrigin(request, env)) return json({ error: "Bad origin." }, 403);
-  const body = await readJson(request);
+  const body = await readJson(request, 16384);
   if (!body || !Array.isArray(body.splashes)) return json({ error: "Bad request." }, 400);
   const list = [];
   for (const x of body.splashes) {
