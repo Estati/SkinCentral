@@ -676,6 +676,92 @@ async function adminStats(request, env) {
   return json({ users, approved, pending, denied, downloads, likes, comments, reports });
 }
 
+/* ---------- owner + admin tools: move packs to site accounts ---------- */
+const DIGITS = /^[0-9]{5,25}$/; // old discord ids are only digits
+
+// GET /api/admin/legacy -> every old discord id that still has packs, comments or likes
+async function adminLegacy(request, env) {
+  const s = await readSession(env, request);
+  if (!isAdmin(s)) return json({ error: "Admins only." }, 403);
+  const digits = (col) => `${col} GLOB '[0-9]*' AND ${col} NOT GLOB '*[^0-9]*'`;
+  const { results } = await env.DB.prepare(
+    `SELECT id, MAX(name) AS name, SUM(packs) AS packs, SUM(comments) AS comments, SUM(likes) AS likes FROM (
+       SELECT creator_id AS id, creator_name AS name, 1 AS packs, 0 AS comments, 0 AS likes FROM packs WHERE ${digits("creator_id")}
+       UNION ALL
+       SELECT user_id, user_name, 0, 1, 0 FROM comments WHERE ${digits("user_id")}
+       UNION ALL
+       SELECT user_id, NULL, 0, 0, 1 FROM likes WHERE ${digits("user_id")}
+     ) GROUP BY id ORDER BY packs DESC, comments DESC LIMIT 100`
+  ).all();
+  return json({
+    accounts: (results || []).map((r) => ({
+      id: r.id,
+      name: r.name || "",
+      packs: r.packs || 0,
+      comments: r.comments || 0,
+      likes: r.likes || 0,
+    })),
+  });
+}
+
+// finds a site account by username, null if there isnt one
+async function findAccount(env, name) {
+  const lc = clean(name, 20).toLowerCase();
+  if (!lc) return null;
+  return env.DB.prepare("SELECT id, username, banned FROM users WHERE username_lc = ?").bind(lc).first();
+}
+
+// POST /api/admin/migrate {from: old discord id, to: username}
+// moves all packs, comments and likes from the old id to the account
+async function migrateLegacy(request, env) {
+  const s = await readSession(env, request);
+  if (!isAdmin(s)) return json({ error: "Admins only." }, 403);
+  if (!sameOrigin(request, env)) return json({ error: "Bad origin." }, 403);
+  const body = await readJson(request);
+  if (!body) return json({ error: "Bad request." }, 400);
+  const from = String(body.from || "");
+  if (!DIGITS.test(from)) return json({ error: "That is not an old Discord account." }, 400);
+  const to = await findAccount(env, body.to);
+  if (!to) return json({ error: "There is no account with that username." }, 404);
+  if (to.banned) return json({ error: "That account is banned." }, 400);
+
+  // batch = all or nothing
+  const res = await env.DB.batch([
+    env.DB.prepare("UPDATE packs SET creator_id = ?, creator_name = ? WHERE creator_id = ?").bind(to.id, to.username, from),
+    env.DB.prepare("UPDATE comments SET user_id = ?, user_name = ? WHERE user_id = ?").bind(to.id, to.username, from),
+    // OR IGNORE skips likes the account already has, the leftovers get deleted after
+    env.DB.prepare("UPDATE OR IGNORE likes SET user_id = ? WHERE user_id = ?").bind(to.id, from),
+    env.DB.prepare("DELETE FROM likes WHERE user_id = ?").bind(from),
+  ]);
+  const n = (i) => (res[i] && res[i].meta ? res[i].meta.changes || 0 : 0);
+  const moved = { packs: n(0), comments: n(1), likes: n(2) };
+  if (!moved.packs && !moved.comments && !moved.likes) {
+    return json({ error: "Nothing was found for that Discord account." }, 404);
+  }
+  await logAction(env, s, "moved an old Discord account", `${from} -> ${to.username}`,
+    `${moved.packs} packs, ${moved.comments} comments, ${moved.likes} likes`);
+  return json({ ok: true, moved });
+}
+
+// POST /api/admin/pack-owner {id: pack id, to: username}  (also works for anonymous packs)
+async function setPackOwner(request, env) {
+  const s = await readSession(env, request);
+  if (!isAdmin(s)) return json({ error: "Admins only." }, 403);
+  if (!sameOrigin(request, env)) return json({ error: "Bad origin." }, 403);
+  const body = await readJson(request);
+  if (!body) return json({ error: "Bad request." }, 400);
+  const pack = await env.DB.prepare("SELECT id, name, creator_name FROM packs WHERE id = ?")
+    .bind(String(body.id || "").slice(0, 40)).first();
+  if (!pack) return json({ error: "That pack does not exist." }, 404);
+  const to = await findAccount(env, body.to);
+  if (!to) return json({ error: "There is no account with that username." }, 404);
+  if (to.banned) return json({ error: "That account is banned." }, 400);
+  await env.DB.prepare("UPDATE packs SET creator_id = ?, creator_name = ? WHERE id = ?")
+    .bind(to.id, to.username, pack.id).run();
+  await logAction(env, s, "changed a pack owner", pack.name, `${pack.creator_name || "anonymous"} -> ${to.username}`);
+  return json({ ok: true });
+}
+
 /* ---------- packs ---------- */
 // turns a database row into the same shape as packs.json
 function packView(r) {
@@ -1635,6 +1721,9 @@ async function route(request, env, ctx) {
   if (p === "/api/admin/users" && m === "GET") return adminUsers(request, env, url);
   if (p === "/api/admin/user-role" && m === "POST") return setUserRole(request, env);
   if (p === "/api/admin/user-ban" && m === "POST") return setUserBan(request, env);
+  if (p === "/api/admin/legacy" && m === "GET") return adminLegacy(request, env);
+  if (p === "/api/admin/migrate" && m === "POST") return migrateLegacy(request, env);
+  if (p === "/api/admin/pack-owner" && m === "POST") return setPackOwner(request, env);
   if (p === "/api/admin/log" && m === "GET") return adminLog(request, env);
   if (p === "/api/admin/stats" && m === "GET") return adminStats(request, env);
   if (p === "/admin/setup" && m === "GET") return setupShow(env);
