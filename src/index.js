@@ -204,6 +204,7 @@ async function callback(request, env, url) {
     name: user.global_name || user.username,
     avatar: user.avatar,
     mod: isMod,
+    role: isMod ? "mod" : "user",
     exp: Math.floor(Date.now() / 1000) + maxAge,
   });
 
@@ -223,9 +224,187 @@ async function me(request, env) {
   const s = await readSession(env, request);
   return json(
     s
-      ? { loggedIn: true, user: { id: s.id, name: s.name, avatar: s.avatar }, isMod: s.mod }
+      ? { loggedIn: true, user: { id: s.id, name: s.name, avatar: s.avatar }, isMod: s.mod, role: s.role || (s.mod ? "mod" : "user") }
       : { loggedIn: false }
   );
+}
+
+/* ---------- accounts (username + password) ---------- */
+const PBKDF2_ROUNDS = 100000; // cloudflare's max. the number is saved inside each hash so it can change later
+// names nobody can sign up with (underscores are ignored, so skin_central is blocked too)
+const RESERVED_NAMES = new Set([
+  "skincentral", "admin", "administrator", "owner", "moderator", "mod", "mods",
+  "staff", "support", "system", "anonymous", "anon", "discord", "mojang", "microsoft",
+]);
+// fake hash so unknown usernames take as long to check as real ones
+const DUMMY_HASH = "pbkdf2-sha256$100000$" + "A".repeat(22) + "$" + "A".repeat(43);
+
+// password + secret pepper -> scrambled hash (pbkdf2). the pepper must never change
+async function hashPassword(env, password, salt, rounds) {
+  const peppered = await crypto.subtle.sign(
+    "HMAC",
+    await hmacKey(env.PASSWORD_PEPPER),
+    enc.encode(password)
+  );
+  const key = await crypto.subtle.importKey("raw", peppered, "PBKDF2", false, ["deriveBits"]);
+  const bits = await crypto.subtle.deriveBits(
+    { name: "PBKDF2", hash: "SHA-256", salt, iterations: rounds },
+    key,
+    256
+  );
+  return toB64url(bits);
+}
+
+// compares two strings without stopping at the first difference
+function sameText(a, b) {
+  if (a.length !== b.length) return false;
+  let diff = 0;
+  for (let i = 0; i < a.length; i++) diff |= a.charCodeAt(i) ^ b.charCodeAt(i);
+  return diff === 0;
+}
+
+async function checkPassword(env, password, stored) {
+  const parts = String(stored || "").split("$");
+  if (parts.length !== 4 || parts[0] !== "pbkdf2-sha256") return false;
+  const rounds = Number(parts[1]);
+  if (!(rounds >= 1000 && rounds <= 100000)) return false;
+  const got = await hashPassword(env, password, fromB64url(parts[2]), rounds);
+  return sameText(got, parts[3]);
+}
+
+// reads a small json body, null if its too big or broken
+async function readJson(request) {
+  const len = Number(request.headers.get("Content-Length") || 0);
+  if (len > 4096) return null;
+  try {
+    const text = await request.text();
+    if (text.length > 4096) return null;
+    const data = JSON.parse(text);
+    return data && typeof data === "object" ? data : null;
+  } catch {
+    return null;
+  }
+}
+
+// rate limit helpers, they use the login_attempts table
+async function countAttempts(env, key, since) {
+  const r = await env.DB.prepare(
+    "SELECT COUNT(*) AS n FROM login_attempts WHERE key = ? AND created_at > ?"
+  ).bind(key, since).first();
+  return r ? r.n : 0;
+}
+
+async function addAttempt(env, key, now) {
+  await env.DB.prepare("INSERT INTO login_attempts (key, created_at) VALUES (?, ?)").bind(key, now).run();
+  // now and then sweep out rows older than a day
+  if (Math.random() < 0.05) {
+    await env.DB.prepare("DELETE FROM login_attempts WHERE created_at < ?").bind(now - 86400).run().catch(() => {});
+  }
+}
+
+// makes the session cookie, same cookie the discord login uses
+async function startSession(env, u) {
+  const mod = u.role === "mod" || u.role === "owner";
+  const maxAge = mod ? 60 * 60 * 24 : 60 * 60 * 24 * 7;
+  const token = await signSession(env, {
+    id: u.id,
+    name: u.username,
+    avatar: null,
+    mod,
+    role: u.role,
+    exp: Math.floor(Date.now() / 1000) + maxAge,
+  });
+  const res = json({ ok: true });
+  res.headers.append("Set-Cookie", cookie("session", token, maxAge));
+  return res;
+}
+
+async function signup(request, env) {
+  if (!sameOrigin(request, env)) return json({ error: "Bad origin." }, 403);
+  if (!env.PASSWORD_PEPPER) return json({ error: "Accounts are not set up yet. Tell the owner." }, 500);
+  const body = await readJson(request);
+  if (!body) return json({ error: "That did not look right. Try again." }, 400);
+
+  const username = String(body.username || "").trim();
+  const password = String(body.password || "");
+  if (!/^[A-Za-z0-9_]{3,20}$/.test(username)) {
+    return json({ error: "Usernames are 3 to 20 letters, numbers or underscores." }, 400);
+  }
+  const lc = username.toLowerCase();
+  if (RESERVED_NAMES.has(lc.replace(/_/g, ""))) return json({ error: "That username is reserved." }, 400);
+  if (password.length < 10) return json({ error: "Your password needs at least 10 characters." }, 400);
+  if (password.length > 128) return json({ error: "That password is too long (128 max)." }, 400);
+  if (password.toLowerCase() === lc) return json({ error: "Your password can not be your username." }, 400);
+
+  // 3 new accounts per connection per hour
+  const now = Math.floor(Date.now() / 1000);
+  const tag = await visitorTag(request, env);
+  if ((await countAttempts(env, "signup:" + tag, now - 3600)) >= 3) {
+    return json({ error: "Too many accounts made from your connection. Try again in an hour." }, 429);
+  }
+  if (!(await checkHuman(request, env))) {
+    return json({ error: "The human check failed. Please try again." }, 400);
+  }
+
+  const taken = await env.DB.prepare("SELECT id FROM users WHERE username_lc = ?").bind(lc).first();
+  if (taken) return json({ error: "That username is taken." }, 409);
+
+  const salt = crypto.getRandomValues(new Uint8Array(16));
+  const hash = await hashPassword(env, password, salt, PBKDF2_ROUNDS);
+  const passHash = `pbkdf2-sha256$${PBKDF2_ROUNDS}$${toB64url(salt)}$${hash}`;
+  const id = "u" + [...crypto.getRandomValues(new Uint8Array(6))].map((b) => b.toString(16).padStart(2, "0")).join("");
+
+  try {
+    await env.DB.prepare(
+      "INSERT INTO users (id, username, username_lc, pass_hash, role, banned, created_at) VALUES (?, ?, ?, ?, 'user', 0, ?)"
+    ).bind(id, username, lc, passHash, now).run();
+  } catch (e) {
+    // two people grabbing the same name at the same moment
+    if (/UNIQUE/i.test(String(e))) return json({ error: "That username is taken." }, 409);
+    throw e;
+  }
+  await addAttempt(env, "signup:" + tag, now);
+  return startSession(env, { id, username, role: "user" });
+}
+
+async function loginPassword(request, env) {
+  if (!sameOrigin(request, env)) return json({ error: "Bad origin." }, 403);
+  if (!env.PASSWORD_PEPPER) return json({ error: "Accounts are not set up yet. Tell the owner." }, 500);
+  const body = await readJson(request);
+  if (!body) return json({ error: "That did not look right. Try again." }, 400);
+
+  const username = String(body.username || "").trim().slice(0, 40);
+  const password = String(body.password || "").slice(0, 200);
+  const lc = username.toLowerCase();
+  if (!lc || !password) return json({ error: "Enter a username and password." }, 400);
+
+  // 10 wrong tries per connection or per username, then wait 15 minutes
+  const now = Math.floor(Date.now() / 1000);
+  const tag = await visitorTag(request, env);
+  const ipKey = "login:ip:" + tag;
+  const userKey = "login:user:" + lc;
+  if (
+    (await countAttempts(env, ipKey, now - 900)) >= 10 ||
+    (await countAttempts(env, userKey, now - 900)) >= 10
+  ) {
+    return json({ error: "Too many wrong tries. Wait 15 minutes and try again." }, 429);
+  }
+
+  const u = await env.DB.prepare(
+    "SELECT id, username, pass_hash, role, banned FROM users WHERE username_lc = ?"
+  ).bind(lc).first();
+  // always hash, even for names that dont exist, so the timing looks the same
+  const ok = await checkPassword(env, password, u ? u.pass_hash : DUMMY_HASH);
+  if (!u || !ok) {
+    await addAttempt(env, ipKey, now);
+    await addAttempt(env, userKey, now);
+    return json({ error: "Wrong username or password." }, 401);
+  }
+  if (u.banned) return json({ error: "This account has been banned." }, 403);
+
+  // right password clears that usernames counter (the connection counter stays)
+  await env.DB.prepare("DELETE FROM login_attempts WHERE key = ?").bind(userKey).run().catch(() => {});
+  return startSession(env, u);
 }
 
 /* ---------- packs ---------- */
@@ -272,7 +451,7 @@ async function listPacks(env) {
 
 async function myPacks(request, env) {
   const s = await readSession(env, request);
-  if (!s) return json({ error: "Please log in with Discord first." }, 401);
+  if (!s) return json({ error: "Please log in first." }, 401);
   const { results } = await env.DB.prepare(
     "SELECT id, name, description, tags, images, files, status, deny_reason, created_at FROM packs WHERE creator_id = ? ORDER BY created_at DESC LIMIT 50"
   ).bind(s.id).all();
@@ -291,7 +470,7 @@ async function myPacks(request, env) {
 // - denied pack always goes back to pending
 async function editMine(request, env, ctx) {
   const s = await readSession(env, request);
-  if (!s) return json({ error: "Please log in with Discord first." }, 401);
+  if (!s) return json({ error: "Please log in first." }, 401);
   if (!sameOrigin(request, env)) return json({ error: "Bad origin." }, 403);
   const len = Number(request.headers.get("Content-Length") || 0);
   if (len > LIMITS.total + 1024 * 1024) return json({ error: "That upload is too big." }, 413);
@@ -479,7 +658,7 @@ async function editMine(request, env, ctx) {
 // R2 files go first, then the database row
 async function deleteMine(request, env) {
   const s = await readSession(env, request);
-  if (!s) return json({ error: "Please log in with Discord first." }, 401);
+  if (!s) return json({ error: "Please log in first." }, 401);
   if (!sameOrigin(request, env)) return json({ error: "Bad origin." }, 403);
   let body;
   try {
@@ -549,7 +728,7 @@ async function submit(request, env, ctx) {
     s = { id: "anon", name: "Anonymous" };
   } else {
     s = await readSession(env, request);
-    if (!s) return json({ error: "Please log in with Discord first." }, 401);
+    if (!s) return json({ error: "Please log in first." }, 401);
   }
   if (!sameOrigin(request, env)) return json({ error: "Bad origin." }, 403);
 
@@ -1182,6 +1361,8 @@ async function route(request, env, ctx) {
   if (p === "/auth/callback") return callback(request, env, url);
   if (p === "/auth/logout") return logout(env);
   if (p === "/api/me") return me(request, env);
+  if (p === "/api/signup" && m === "POST") return signup(request, env);
+  if (p === "/api/login" && m === "POST") return loginPassword(request, env);
   if (p === "/api/packs" && m === "GET") return listPacks(env);
   if (p === "/api/my" && m === "GET") return myPacks(request, env);
   if (p === "/api/social" && m === "GET") return packSocial(request, env, url);
