@@ -44,8 +44,8 @@ body::before{content:"";position:fixed;inset:0;background:rgba(0,0,0,.35);z-inde
 
 h1{margin:16px auto 52px;position:relative;display:block;max-width:720px}
 .logo{display:block;width:100%;height:auto;image-rendering:pixelated}
-.splash{position:absolute;right:0;bottom:-28px;font-size:var(--t);color:var(--gold);
-  text-shadow:2px 2px 0 #3f3f00;transform:rotate(-8deg);animation:pulse 1s ease-in-out infinite alternate;white-space:nowrap}
+.splash{position:absolute;right:0;top:calc(100% - 12px);width:max-content;max-width:min(100%,440px);text-align:right;line-height:1.1;font-size:var(--t);color:var(--gold);
+  text-shadow:2px 2px 0 #3f3f00;transform:rotate(-8deg);animation:pulse 1s ease-in-out infinite alternate}   /* long splashes wrap onto a second line instead of running off the screen */
 @keyframes pulse{to{transform:rotate(-8deg) scale(1.1)}}
 .sub{text-align:center;font-size:var(--b);margin:0 0 20px;color:#e6e6e6;text-shadow:var(--sh) var(--sh) 0 #3b3b3b}
 
@@ -1245,7 +1245,7 @@ function ownerMove(o){
 
 /* ---------- owner panel: splash texts (the tilted text under the logo) ---------- */
 function ownerSplash(o){
-  const MAX=30,COUNT=60;
+  const MAX=50,COUNT=60;
   const box=el('textarea',{rows:'12','aria-label':'Splash texts, one per line'});
   const info=el('p',{class:'hint'});
   const msg=el('p',{class:'msg',role:'status'});
@@ -1256,7 +1256,7 @@ function ownerSplash(o){
   const lines=()=>box.value.split('\n').map(x=>x.trim()).filter(Boolean);
   const count=()=>{
     const l=lines(),long=l.filter(x=>x.length>MAX).length;
-    info.textContent=l.length+' of '+COUNT+' splashes'+(long?' - '+long+' too long (max '+MAX+' characters, shorter fits phones better)':'');
+    info.textContent=l.length+' of '+COUNT+' splashes'+(long?' - '+long+' too long (max '+MAX+' characters)':'');
   };
   box.addEventListener('input',count);
   peek.addEventListener('click',()=>{
@@ -1282,7 +1282,7 @@ function ownerSplash(o){
   }));
   o.append(
     el('h3',{text:'Splash texts'}),
-    el('p',{class:'hint',text:'One per line. A random one shows under the logo each time the page loads. Keep them short (about 25 characters) so they fit on phones.'}),
+    el('p',{class:'hint',text:'One per line. A random one shows under the logo each time the page loads. Up to 50 characters each. Shorter ones look better on phones.'}),
     box,info,el('div',{class:'dl'},save,peek,back),msg);
   fetch('/api/splashes',{cache:'no-store'}).then(r=>r.json()).then(d=>{
     box.value=(d.custom&&d.splashes.length?d.splashes:splashes).join('\n');count();
