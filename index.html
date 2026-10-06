@@ -93,6 +93,9 @@ input[type=file]{width:100%;font:inherit;font-size:var(--t);color:#cfc8bf;backgr
 #upload .btn{margin-top:16px}
 .card.admin{align-items:stretch;text-align:left;margin-bottom:16px}
 .card.admin h3{margin:0 0 8px}
+.card.admin .dl .btn{width:auto;flex:1 1 140px}
+.userlist{margin-top:16px}
+#owner input[type=text]+.dl{margin-top:12px}
 .card.admin input[type=text]{margin:8px 0}
 .picon{width:23px;height:23px;image-rendering:pixelated;vertical-align:middle;margin-right:8px}
 @media (min-width:700px){.picon{width:46px;height:46px}}
@@ -756,12 +759,12 @@ fetch('/api/news',{cache:'no-store'}).then(r=>r.ok?r.json():Promise.reject()).th
 }).catch(()=>{});
 
 /* ---------- owner panel (#/owner) ----------
-   only mods can open it for now, once the owner account exists it will be owner only */
+   owner only. announcements + the accounts list (roles and bans) */
 function showOwner(){
   const o=$('owner');o.textContent='';document.title='Owner panel | Skin Central';
   o.append(el('h2',{text:'Owner panel'}));
   meP.then(me=>{
-    if(!me.loggedIn||!me.isMod){o.append(el('p',{text:'You do not have access to this page.'}));return}
+    if(!me.loggedIn||me.role!=='owner'){o.append(el('p',{text:'You do not have access to this page.'}));return}
     let hasImage=false,version=0;
     const title=el('input',{type:'text',maxlength:'40','aria-label':'Box title'});
     const intro=el('input',{type:'text',maxlength:'80','aria-label':'Line under the title'});
@@ -830,7 +833,73 @@ function showOwner(){
       }catch{say('Network problem. Try again.')}
       save.disabled=false;
     });
+    ownerUsers(o);
   });
+}
+
+/* ---------- owner panel: accounts (search, make moderator, ban) ---------- */
+function ownerUsers(o){
+  const q=el('input',{type:'text',maxlength:'20','aria-label':'Search usernames',placeholder:'Search usernames'});
+  const go=el('button',{class:'btn',type:'button',text:'Search'});
+  const list=el('div',{class:'userlist'});
+  const msg=el('p',{class:'msg',role:'status'});
+  const say=(t,ok)=>{msg.className='msg '+(ok?'ok':'err');msg.textContent=t};
+
+  async function post(path,body){
+    const r=await fetch(path,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});
+    const j=await r.json().catch(()=>({}));
+    if(!r.ok||!j.ok)throw new Error(j.error||'That did not work.');
+  }
+
+  // a button that asks "are you sure?" first, then calls the worker and reloads the list
+  function mk(text,title,ask,yes,path,body){
+    const b=el('button',{class:'btn',type:'button',text});
+    b.addEventListener('click',()=>askConfirm(title,ask,yes,async()=>{
+      try{await post(path,body);load();say('Done.',true)}catch(e){say(e.message)}
+    }));
+    return b;
+  }
+
+  function row(u){
+    const label=u.role==='owner'?'Owner':u.role==='mod'?'Moderator':'User';
+    const joined=new Date(u.created*1000).toISOString().slice(0,10);
+    const btns=el('div',{class:'dl'});
+    if(u.role!=='owner'){
+      if(u.banned){
+        add(btns,mk('Unban','Unban '+u.username+'?','They will be able to log in again as a normal user.','Yes, unban','/api/admin/user-ban',{id:u.id,banned:false}));
+      }else{
+        add(btns,u.role==='mod'
+          ?mk('Remove moderator','Remove moderator?',u.username+' will go back to a normal user.','Yes, remove','/api/admin/user-role',{id:u.id,role:'user'})
+          :mk('Make moderator','Make '+u.username+' a moderator?','They will be able to review, edit and delete any pack.','Yes, promote','/api/admin/user-role',{id:u.id,role:'mod'}),
+          mk('Ban','Ban '+u.username+'?','They get logged out right away and can not log in. Their packs stay up.','Yes, ban','/api/admin/user-ban',{id:u.id,banned:true}));
+      }
+    }
+    return el('div',{class:'card admin'},
+      el('span',{class:'name',text:u.username}),
+      el('small',{text:label+(u.banned?' (banned)':'')+' - joined '+joined}),
+      btns.children.length?btns:null);
+  }
+
+  async function load(){
+    msg.textContent='';
+    try{
+      const r=await fetch('/api/admin/users?q='+encodeURIComponent(q.value.trim()),{cache:'no-store'});
+      const d=await r.json().catch(()=>({}));
+      if(!r.ok)return say(d.error||'Could not load the accounts.');
+      list.textContent='';
+      if(!d.users.length)list.append(el('p',{class:'hint',text:'No accounts found.'}));
+      d.users.forEach(u=>list.append(row(u)));
+      if(d.more)list.append(el('p',{class:'hint',text:'Showing the newest 50. Search to narrow it down.'}));
+    }catch{say('Network problem. Try again.')}
+  }
+
+  go.addEventListener('click',load);
+  q.addEventListener('keydown',e=>{if(e.key==='Enter')load()});
+  o.append(
+    el('h3',{text:'Accounts'}),
+    el('p',{class:'hint',text:'Everyone who signed up on the site. Moderators can review, edit and delete packs. Banned accounts are logged out right away. Old Discord logins are not listed here.'}),
+    q,el('div',{class:'dl'},go),msg,list);
+  load();
 }
 
 /* are you sure popup, onYes() only runs if they hit the yes button */
@@ -1103,12 +1172,13 @@ meP.then(me=>{
   }
   bar.append(
     el('a',{class:'acct',href:'#/account',title:'My account'},pic,
-      el('span',{class:'who'},el('span',{text:me.user.name}),el('small',{text:me.isMod?'Moderator':'My account'}))),
+      el('span',{class:'who'},el('span',{text:me.user.name}),el('small',{text:me.role==='owner'?'Owner':me.isMod?'Moderator':'My account'}))),
     el('a',{class:'btn',href:'/auth/logout',text:'Log out'}));
   if(me.isMod){
-    document.querySelector('.row').append(
-      el('a',{class:'btn',href:'#/admin',text:'Moderation'}),
-      el('a',{class:'btn',href:'#/owner',text:'Owner panel'}));
+    document.querySelector('.row').append(el('a',{class:'btn',href:'#/admin',text:'Moderation'}));
+  }
+  if(me.role==='owner'){
+    document.querySelector('.row').append(el('a',{class:'btn',href:'#/owner',text:'Owner panel'}));
   }
 }).catch(()=>{});
 
