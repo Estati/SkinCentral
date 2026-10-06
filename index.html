@@ -89,6 +89,23 @@ input[type=text],input[type=password],textarea{width:100%;font:inherit;font-size
 textarea{min-height:96px;resize:vertical}
 input[type=text]:focus,input[type=password]:focus,textarea:focus{outline:3px solid var(--gold)}
 input[type=file]{width:100%;font:inherit;font-size:var(--t);color:#cfc8bf;background:#000;padding:8px;border:3px solid #6d6d6d}
+/* the "choose file" button looks like the other gray beveled buttons */
+input[type=file]::file-selector-button{font:inherit;font-size:var(--t);color:#fff;text-shadow:2px 2px 0 #3f3f3f;background:var(--btn);padding:6px 12px;margin-right:12px;border:4px solid;border-color:var(--btn-hi) var(--btn-lo) var(--btn-lo) var(--btn-hi);outline:3px solid #000;cursor:pointer}
+input[type=file]::file-selector-button:hover{color:var(--gold);background:#7c86b8}
+input[type=file]:focus-visible{outline:3px solid var(--gold)}
+/* dropdown: same black box as the text boxes, little pixel arrow on the right */
+select{appearance:none;-webkit-appearance:none;width:100%;font:inherit;font-size:var(--b);color:#fff;background-color:#000;border-radius:0;padding:8px 48px 8px 12px;border:3px solid #6d6d6d;
+  background-image:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='24' height='15' viewBox='0 0 8 5' shape-rendering='crispEdges'%3E%3Cpath d='M0 0h8v1H7v1H6v1H5v1H3V3H2V2H1V1H0z' fill='%23ffff55'/%3E%3C/svg%3E");
+  background-repeat:no-repeat;background-position:right 12px center}
+select:hover{border-color:#aaa}
+select:focus{outline:3px solid var(--gold)}
+select:disabled{opacity:.5}
+select option{background:#000;color:#fff;font-family:inherit}
+select option:checked{background:#7c86b8;color:var(--gold)}
+input[type=checkbox]{accent-color:var(--gold)}
+/* upload progress bar, black box with a green fill like the xp bar */
+.bar{height:24px;background:#000;border:3px solid #6d6d6d;margin:12px 0 4px;padding:2px}
+.bar>i{display:block;height:100%;width:0;background:#55ff55;box-shadow:inset 0 -4px 0 #2f9f2f,inset 0 4px 0 #a5ffa5;transition:width .2s steps(8)}
 .hint{font-size:var(--t);color:#bdb5ac;margin:0 0 8px}
 .msg{margin:16px 0 0;font-size:var(--b);overflow-wrap:break-word}
 .msg.err{color:#ff5555}
@@ -193,6 +210,10 @@ footer{margin-top:8px;font-size:var(--t);color:#cfc8bf;text-shadow:2px 2px 0 #00
 
   <section class="panel" id="skins">
     <h2>Downloads</h2>
+    <div class="tabs" id="ptabs">
+      <button class="btn" type="button" id="tab-skin" aria-pressed="true">Skin packs</button>
+      <button class="btn" type="button" id="tab-texture" aria-pressed="false">Texture packs</button>
+    </div>
     <button class="btn" id="refresh" type="button">Refresh</button>
     <input type="search" id="q" placeholder="Search packs or platforms" aria-label="Search packs">
     <div class="grid" id="grid"></div>
@@ -413,12 +434,24 @@ function packCard(p){
     pl.children.length?pl:null,
     el('small',{},el('span',{text:'by '}),creatorLink(p),el('span',{text:' for '+p.files.map(x=>x.platform).join(', ')})),
     typeof p.downloads==='number'?el('small',{text:countText(p.likes||0,'like')+', '+countText(p.downloads,'download')}):null,
+    typeOf(p)==='texture'?el('small',{text:'Texture pack'}):null,
     el('a',{href,class:'btn',text:'View pack'}));
 }
+// which tab of the gallery is open: 'skin' or 'texture' (old packs without a type count as skins)
+let packType='skin';
+const typeOf=p=>p.type==='texture'?'texture':'skin';
 function renderList(filter){
   const grid=$('grid');grid.textContent='';document.title='Skin Central: Legacy Console Edition';
   const f=(filter||'').toLowerCase().trim();
-  const list=packs.filter(p=>(p.name+' '+p.tags.join(' ')+' '+p.files.map(x=>x.platform).join(' ')).toLowerCase().includes(f));
+  // tab buttons: highlight the open one and show how many packs each has
+  ['skin','texture'].forEach(t=>{
+    const b=$('tab-'+t);
+    b.setAttribute('aria-pressed',String(packType===t));
+    b.textContent=(t==='skin'?'Skin packs':'Texture packs')+' ('+packs.filter(p=>typeOf(p)===t).length+')';
+  });
+  const inTab=packs.filter(p=>typeOf(p)===packType);
+  const list=inTab.filter(p=>(p.name+' '+p.tags.join(' ')+' '+p.files.map(x=>x.platform).join(' ')).toLowerCase().includes(f));
+  if(!inTab.length){grid.appendChild(el('p',{class:'empty',text:packType==='texture'?'No texture packs yet. Be the first to upload one!':'No skin packs yet.'}));return}
   if(!list.length){grid.appendChild(el('p',{class:'empty',text:'No packs match that search. Try a different word.'}));return}
   list.forEach(p=>grid.appendChild(packCard(p)));
 }
@@ -460,7 +493,7 @@ function showPack(p){
   });
   d.append(
     el('div',{class:'head'},icon(p,'big'),el('div',{},
-      el('h2',{text:p.name}),el('p',{class:'by'},el('span',{text:'By '}),creatorLink(p),el('span',{text:', added '+p.date})),typeof p.downloads==='number'?el('p',{class:'by',text:countText(p.downloads,'download')}):null,el('p',{class:'tags',text:p.tags.join(', ')}))),
+      el('h2',{text:p.name}),el('p',{class:'by'},el('span',{text:'By '}),creatorLink(p),el('span',{text:', added '+p.date})),el('p',{class:'by',text:typeOf(p)==='texture'?'Texture pack':'Skin pack'}),typeof p.downloads==='number'?el('p',{class:'by',text:countText(p.downloads,'download')}):null,el('p',{class:'tags',text:p.tags.join(', ')}))),
     el('p',{class:'desc',text:p.description}),el('h3',{text:'Download'}),dl);
   if(p.images&&p.images.length){
     const g=el('div',{class:'shots'});
@@ -482,7 +515,42 @@ function showPack(p){
    limits here match src/index.js, the server checks them again anyway */
 const meP=fetch('/api/me').then(r=>r.json()).catch(()=>({loggedIn:false}));
 const PLATFORMS=[['xbox360','Xbox 360'],['ps3','PS3'],['wiiu','Wii U'],['vita','PS Vita'],['switch','Switch']];
-const MAXB={icon:512*1024,shot:2*1024*1024,pack:5*1024*1024,total:20*1024*1024,anonTotal:10*1024*1024};
+const MAXB={icon:512*1024,shot:2*1024*1024,pack:5*1024*1024,total:20*1024*1024,anonTotal:10*1024*1024,bigFile:150*1024*1024,bigTotal:300*1024*1024};
+const MB=1024*1024;
+
+/* ---------- big files: logged in people can send pack files over 5 MB in 8 MB pieces ---------- */
+const wait=ms=>new Promise(r=>setTimeout(r,ms));
+async function bigApi(path,body){
+  const r=await fetch(path,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});
+  const d=await r.json().catch(()=>({}));
+  if(!r.ok||!d.ok)throw new Error(d.error||'Upload failed. Please try again.');
+  return d;
+}
+// sends one file in pieces. onPct(0 to 1) moves the progress bar. every piece gets 3 tries
+async function uploadBig(k,f,packId,onPct){
+  const st=await bigApi('/api/upload/start',{filename:f.name,size:f.size,platform:k,packId});
+  const parts=[];
+  for(let i=0;i<st.parts;i++){
+    const chunk=f.slice(i*st.partSize,Math.min(f.size,(i+1)*st.partSize));
+    let etag=null,err=null;
+    for(let t=0;t<3&&!etag;t++){
+      try{
+        const r=await fetch('/api/upload/part?id='+st.uploadId+'&n='+(i+1),{method:'POST',headers:{'Content-Type':'application/octet-stream'},body:chunk});
+        const d=await r.json().catch(()=>({}));
+        if(!r.ok||!d.ok)throw new Error(d.error||'A piece failed to upload.');
+        etag=d.etag;
+      }catch(e){err=e;await wait(1000*(t+1))}
+    }
+    if(!etag)throw err;
+    parts.push({partNumber:i+1,etag});
+    onPct((i+1)/st.parts);
+  }
+  await bigApi('/api/upload/finish',{id:st.uploadId,parts});
+  return {uploadId:st.uploadId,packId:st.packId};
+}
+// files that already went up, so a failed submit doesnt send them again (key = platform)
+const bigDone=new Map();
+const fileSig=f=>f.name+'|'+f.size+'|'+f.lastModified;
 // turnstile site key, the public one. the secret stays in cloudflare
 const TURNSTILE_SITEKEY='0x4AAAAAAFNDmMezO6jwChH7';
 const IMG_OK='image/png,image/jpeg,image/webp';
@@ -526,6 +594,14 @@ function showUpload(){
   u.append(el('h2',{text:'Upload a pack'}));
 
   function buildForm(anon){
+    const kind=el('select',{id:'f-type'},el('option',{value:'skin',text:'Skin pack'}),el('option',{value:'texture',text:'Texture pack'}));
+    // if they came from the texture tab, start on texture
+    if(packType==='texture')kind.value='texture';
+    const kindHint=el('p',{class:'hint'});
+    const setHint=()=>{kindHint.textContent=kind.value==='texture'
+      ?'Texture packs can include music and maps too. Big files are fine, just keep this page open while it uploads.'
+      :'Skin packs: custom skins for the Skin Packs menu.'};
+    kind.addEventListener('change',setHint);setHint();
     const name=el('input',{type:'text',id:'f-name',maxlength:'40'});
     const desc=el('textarea',{id:'f-desc',maxlength:'500'});
     const tags=el('input',{type:'text',id:'f-tags',maxlength:'200',placeholder:'youtuber, funny, boys'});
@@ -535,6 +611,9 @@ function showUpload(){
     const msg=el('p',{class:'msg',role:'status'});
     const go=el('button',{class:'btn',type:'button',text:'Submit for review'});
     const mine=el('div',{});
+    const barFill=el('i');
+    const barText=el('p',{class:'hint'});
+    const barBox=el('div',{hidden:''},el('div',{class:'bar'},barFill),barText);
     const fail=t=>{msg.className='msg err';msg.textContent=t};
     const maxTotal=anon?MAXB.anonTotal:MAXB.total;
     const tsBox=anon?el('div',{id:'f-ts'}):null;
@@ -542,8 +621,9 @@ function showUpload(){
 
     add(u,
       anon?el('p',{class:'callout',text:'Uploading anonymously: no name is shown, and you cannot edit or delete the pack later.'}):null,
-      el('p',{class:'hint',text:'Only upload skins made by you or your community, not ripped official content, and no NSFW content. A moderator checks every pack before it appears.'}),
+      el('p',{class:'hint',text:'Only upload skins and texture packs made by you or your community, not ripped official content, and no NSFW content. A moderator checks every pack before it appears.'}),
       el('a',{class:'btn',href:'#/rules',text:'Read the rules first'}),
+      el('label',{for:'f-type',text:'What are you uploading?'}),kind,kindHint,
       el('label',{for:'f-name',text:'Pack name'}),name,
       el('label',{for:'f-desc',text:'Description (optional)'}),desc,
       el('label',{for:'f-tags',text:'Tags, separated by commas (up to 5)'}),tags,
@@ -552,10 +632,10 @@ function showUpload(){
       el('h3',{text:'Screenshots (optional)'}),
       el('p',{class:'hint',text:'Up to 4 images. PNG, JPG or WebP, up to 2 MB each.'}),...shots,
       el('h3',{text:'Pack files'}),
-      el('p',{class:'hint',text:'Add a file for each platform you have. At least one is required, up to 5 MB each'+(anon?', and up to 10 MB for the whole upload.':'.')}));
+      el('p',{class:'hint',text:anon?'Add a file for each platform you have. At least one is required, up to 5 MB each and 10 MB for the whole upload. Log in to upload bigger files.':'Add a file for each platform you have. At least one is required, up to 150 MB each. Files over 5 MB upload in pieces with a progress bar, so keep this page open until it says done.'}));
     pf.forEach(([k,n,input])=>u.append(el('label',{for:'f-file-'+k,text:n}),input));
     if(anon)u.append(el('h3',{text:'Human check'}),tsBox);
-    u.append(go,msg,mine);
+    u.append(go,barBox,msg,mine);
 
     function loadMine(){
       if(anon)return;
@@ -576,20 +656,26 @@ function showUpload(){
       if(!ic)return fail('Please add an icon image.');
       if(ic.size>MAXB.icon)return fail('The icon is too big (max 512 KB).');
       const fd=new FormData();
-      fd.append('name',nm);fd.append('description',desc.value);fd.append('tags',tags.value);fd.append('icon',ic);
+      fd.append('type',kind.value);fd.append('name',nm);fd.append('description',desc.value);fd.append('tags',tags.value);fd.append('icon',ic);
       let total=ic.size,count=0;
       for(let i=0;i<4;i++){
         const f=shots[i].files[0];if(!f)continue;
         if(f.size>MAXB.shot)return fail('Screenshot '+(i+1)+' is too big (max 2 MB).');
         fd.append('shot'+(i+1),f);total+=f.size;
       }
+      const bigList=[];let bigSum=0;
       for(const [k,n,input] of pf){
         const f=input.files[0];if(!f)continue;
-        if(f.size>MAXB.pack)return fail('The '+n+' file is too big (max 5 MB).');
-        fd.append('file_'+k,f);total+=f.size;count++;
+        count++;
+        if(f.size>MAXB.pack){
+          if(anon)return fail('The '+n+' file is over 5 MB. Log in to upload bigger files.');
+          if(f.size>MAXB.bigFile)return fail('The '+n+' file is too big (max '+(MAXB.bigFile/MB)+' MB).');
+          bigList.push([k,n,f]);bigSum+=f.size;   // goes up in pieces below
+        }else{fd.append('file_'+k,f);total+=f.size}
       }
       if(!count)return fail('Please add at least one pack file.');
-      if(total>maxTotal)return fail('That upload is too big overall (max '+(maxTotal/1024/1024)+' MB).');
+      if(total>maxTotal)return fail('That upload is too big overall (max '+(maxTotal/MB)+' MB).');
+      if(total+bigSum>MAXB.bigTotal)return fail('That upload is too big overall (max '+(MAXB.bigTotal/MB)+' MB).');
       let url='/api/submit',headers={};
       if(anon){
         const tok=human.token();
@@ -597,17 +683,44 @@ function showUpload(){
         url='/api/submit?anon=1';headers={'X-Turnstile-Token':tok};
       }
       go.disabled=true;msg.textContent='Uploading... please wait.';
+      if(bigList.length){
+        try{
+          // if some files already went up on an earlier try, keep using their pack id
+          let packId='';
+          for(const [k,,f] of bigList){const g=bigDone.get(k);if(g&&g.sig===fileSig(f)){packId=g.packId;break}}
+          barBox.hidden=false;
+          for(let i=0;i<bigList.length;i++){
+            const [k,n,f]=bigList[i];
+            let g=bigDone.get(k);
+            if(!g||g.sig!==fileSig(f)){
+              const show=p=>{barFill.style.width=Math.round(p*100)+'%';barText.textContent='Uploading the '+n+' file ('+(i+1)+' of '+bigList.length+'): '+Math.round(p*100)+'%'};
+              show(0);
+              g=await uploadBig(k,f,packId,show);
+              g.sig=fileSig(f);bigDone.set(k,g);
+            }
+            if(packId&&g.packId!==packId){bigDone.clear();throw new Error('Something got out of sync. Press Submit again.')}
+            packId=g.packId;
+            fd.append('big_'+k,g.uploadId);
+          }
+          fd.append('packId',packId);
+          barFill.style.width='100%';barText.textContent='Files uploaded. Sending your pack in...';
+        }catch(e){
+          barBox.hidden=true;go.disabled=false;
+          return fail((e&&e.message)||'Upload failed. Please try again.');
+        }
+      }
       try{
         const r=await fetch(url,{method:'POST',headers,body:fd});
         const d=await r.json().catch(()=>({}));
         if(r.ok&&d.ok){
           msg.className='msg ok';msg.textContent=d.message;
-          name.value='';desc.value='';tags.value='';icon.value='';
+          name.value='';desc.value='';tags.value='';icon.value='';bigDone.clear();
           shots.forEach(i=>{i.value=''});pf.forEach(x=>{x[2].value=''});
           loadMine();
         }else fail(d.error||'Upload failed. Please try again.');
       }catch{fail('Upload failed. Check your connection and try again.')}
       if(anon)human.reset();   // token only works once so reset it
+      barBox.hidden=true;
       go.disabled=false;
     });
   }
@@ -765,6 +878,8 @@ function showRules(){
   r.append(el('h2',{text:'Accounts and uploads'}),
     el('h3',{text:'Accounts'}),
     el('p',{text:'Sign up with a username and a password, no email needed. Use a password you do not use anywhere else and never share it. If you forget it, ask an admin in the Discord for a temporary one, then change it on My account.'}),
+    el('h3',{text:'Big files and texture packs'}),
+    el('p',{text:'Texture packs can include music and maps. Pack files up to 5 MB can be uploaded by anyone. Bigger files (up to 150 MB each) need an account.'}),
     el('h3',{text:'Anonymous uploads'}),
     el('p',{text:'You can upload without an account. Anonymous packs are checked like every other pack, but only moderators can edit or delete them afterwards, so ask in the Discord if something needs to change. Make an account if you want to manage your own packs.'}),
     el('h3',{text:'Editing a pack after it was approved'}),
@@ -1196,12 +1311,13 @@ function ownerLog(o){
 function ownerStats(o){
   const msg=el('p',{class:'msg',role:'status'});
   const grid=el('div',{class:'grid'});
-  o.append(el('h3',{text:'Site'}),el('p',{class:'hint',text:'Quick numbers. Downloads only count packs stored in the database.'}),msg,grid);
+  o.append(el('h3',{text:'Site'}),el('p',{class:'hint',text:'Quick numbers. Downloads only count packs stored in the database. The free Cloudflare storage holds 10 GB, so keep an eye on Pack files stored.'}),msg,grid);
   fetch('/api/admin/stats',{cache:'no-store'}).then(async r=>{
     const d=await r.json().catch(()=>({}));
     if(!r.ok){msg.className='msg err';msg.textContent=d.error||'Could not load the numbers.';return}
     [['Accounts',d.users],['Packs live',d.approved],['Packs waiting',d.pending],['Packs denied',d.denied],
-     ['Downloads',d.downloads],['Likes',d.likes],['Comments',d.comments],['Open reports',d.reports]]
+     ['Downloads',d.downloads],['Likes',d.likes],['Comments',d.comments],['Open reports',d.reports],
+     ['Pack files stored',(d.storedBytes||0)>=1073741824?((d.storedBytes/1073741824).toFixed(2)+' GB'):(Math.round((d.storedBytes||0)/1048576)+' MB')]]
       .forEach(([label,n])=>grid.append(el('div',{class:'card'},el('span',{class:'name',text:String(n)}),el('small',{text:label}))));
   }).catch(()=>{msg.className='msg err';msg.textContent='Network problem. Try again.'});
 }
@@ -1537,6 +1653,7 @@ function showEditProfile(u){
 
 function route(){
   const h=location.hash;
+  if(h==='#textures')packType='texture';else if(h===''||h==='#skins')packType='skin';
   const m=h.match(/^#\/pack\/(.+)$/);
   const p=m&&packs.find(x=>x.slug===decodeURIComponent(m[1]));
   const us=h.match(/^#\/user\/([A-Za-z0-9_]{3,20})$/);
@@ -1546,6 +1663,9 @@ function route(){
   window.scrollTo(0,0);
 }
 $('q').addEventListener('input',e=>renderList(e.target.value));
+// tabs just change the address, route() does the rest (so back button and links work)
+$('tab-skin').addEventListener('click',()=>{location.hash='#skins'});
+$('tab-texture').addEventListener('click',()=>{location.hash='#textures'});
 window.addEventListener('hashchange',route);
 function loadPacks(quiet){
   return Promise.all([
@@ -1554,7 +1674,7 @@ function loadPacks(quiet){
   ]).then(([a,b])=>{
     packs=a.concat(b);
     // on a normal refresh keep the scroll spot, dont jump to the top
-    if(quiet&&(location.hash===''||location.hash==='#skins'))renderList($('q').value);else route();
+    if(quiet&&(location.hash===''||location.hash==='#skins'||location.hash==='#textures'))renderList($('q').value);else route();
   }).catch(()=>{$('grid').textContent="Couldn't load the pack list. If you opened this file directly, try the live site instead."});
 }
 loadPacks();
