@@ -193,10 +193,6 @@ footer{margin-top:8px;font-size:var(--t);color:#cfc8bf;text-shadow:2px 2px 0 #00
 
   <section class="panel" id="skins">
     <h2>Downloads</h2>
-    <div class="tabs" id="ptabs">
-      <button class="btn" type="button" id="tab-skin" aria-pressed="true">Skin packs</button>
-      <button class="btn" type="button" id="tab-texture" aria-pressed="false">Texture packs</button>
-    </div>
     <button class="btn" id="refresh" type="button">Refresh</button>
     <input type="search" id="q" placeholder="Search packs or platforms" aria-label="Search packs">
     <div class="grid" id="grid"></div>
@@ -417,24 +413,12 @@ function packCard(p){
     pl.children.length?pl:null,
     el('small',{},el('span',{text:'by '}),creatorLink(p),el('span',{text:' for '+p.files.map(x=>x.platform).join(', ')})),
     typeof p.downloads==='number'?el('small',{text:countText(p.likes||0,'like')+', '+countText(p.downloads,'download')}):null,
-    typeOf(p)==='texture'?el('small',{text:'Texture pack'}):null,
     el('a',{href,class:'btn',text:'View pack'}));
 }
-// which tab of the gallery is open: 'skin' or 'texture' (old packs without a type count as skins)
-let packType='skin';
-const typeOf=p=>p.type==='texture'?'texture':'skin';
 function renderList(filter){
   const grid=$('grid');grid.textContent='';document.title='Skin Central: Legacy Console Edition';
   const f=(filter||'').toLowerCase().trim();
-  // tab buttons: highlight the open one and show how many packs each has
-  ['skin','texture'].forEach(t=>{
-    const b=$('tab-'+t);
-    b.setAttribute('aria-pressed',String(packType===t));
-    b.textContent=(t==='skin'?'Skin packs':'Texture packs')+' ('+packs.filter(p=>typeOf(p)===t).length+')';
-  });
-  const inTab=packs.filter(p=>typeOf(p)===packType);
-  const list=inTab.filter(p=>(p.name+' '+p.tags.join(' ')+' '+p.files.map(x=>x.platform).join(' ')).toLowerCase().includes(f));
-  if(!inTab.length){grid.appendChild(el('p',{class:'empty',text:packType==='texture'?'No texture packs yet. Be the first to upload one!':'No skin packs yet.'}));return}
+  const list=packs.filter(p=>(p.name+' '+p.tags.join(' ')+' '+p.files.map(x=>x.platform).join(' ')).toLowerCase().includes(f));
   if(!list.length){grid.appendChild(el('p',{class:'empty',text:'No packs match that search. Try a different word.'}));return}
   list.forEach(p=>grid.appendChild(packCard(p)));
 }
@@ -476,7 +460,7 @@ function showPack(p){
   });
   d.append(
     el('div',{class:'head'},icon(p,'big'),el('div',{},
-      el('h2',{text:p.name}),el('p',{class:'by'},el('span',{text:'By '}),creatorLink(p),el('span',{text:', added '+p.date})),el('p',{class:'by',text:typeOf(p)==='texture'?'Texture pack':'Skin pack'}),typeof p.downloads==='number'?el('p',{class:'by',text:countText(p.downloads,'download')}):null,el('p',{class:'tags',text:p.tags.join(', ')}))),
+      el('h2',{text:p.name}),el('p',{class:'by'},el('span',{text:'By '}),creatorLink(p),el('span',{text:', added '+p.date})),typeof p.downloads==='number'?el('p',{class:'by',text:countText(p.downloads,'download')}):null,el('p',{class:'tags',text:p.tags.join(', ')}))),
     el('p',{class:'desc',text:p.description}),el('h3',{text:'Download'}),dl);
   if(p.images&&p.images.length){
     const g=el('div',{class:'shots'});
@@ -542,9 +526,6 @@ function showUpload(){
   u.append(el('h2',{text:'Upload a pack'}));
 
   function buildForm(anon){
-    const kind=el('select',{id:'f-type'},el('option',{value:'skin',text:'Skin pack'}),el('option',{value:'texture',text:'Texture pack'}));
-    // if they came from the texture tab, start on texture
-    if(packType==='texture')kind.value='texture';
     const name=el('input',{type:'text',id:'f-name',maxlength:'40'});
     const desc=el('textarea',{id:'f-desc',maxlength:'500'});
     const tags=el('input',{type:'text',id:'f-tags',maxlength:'200',placeholder:'youtuber, funny, boys'});
@@ -561,9 +542,8 @@ function showUpload(){
 
     add(u,
       anon?el('p',{class:'callout',text:'Uploading anonymously: no name is shown, and you cannot edit or delete the pack later.'}):null,
-      el('p',{class:'hint',text:'Only upload skins and texture packs made by you or your community, not ripped official content, and no NSFW content. A moderator checks every pack before it appears.'}),
+      el('p',{class:'hint',text:'Only upload skins made by you or your community, not ripped official content, and no NSFW content. A moderator checks every pack before it appears.'}),
       el('a',{class:'btn',href:'#/rules',text:'Read the rules first'}),
-      el('label',{for:'f-type',text:'What are you uploading?'}),kind,
       el('label',{for:'f-name',text:'Pack name'}),name,
       el('label',{for:'f-desc',text:'Description (optional)'}),desc,
       el('label',{for:'f-tags',text:'Tags, separated by commas (up to 5)'}),tags,
@@ -596,7 +576,7 @@ function showUpload(){
       if(!ic)return fail('Please add an icon image.');
       if(ic.size>MAXB.icon)return fail('The icon is too big (max 512 KB).');
       const fd=new FormData();
-      fd.append('type',kind.value);fd.append('name',nm);fd.append('description',desc.value);fd.append('tags',tags.value);fd.append('icon',ic);
+      fd.append('name',nm);fd.append('description',desc.value);fd.append('tags',tags.value);fd.append('icon',ic);
       let total=ic.size,count=0;
       for(let i=0;i<4;i++){
         const f=shots[i].files[0];if(!f)continue;
@@ -1557,7 +1537,6 @@ function showEditProfile(u){
 
 function route(){
   const h=location.hash;
-  if(h==='#textures')packType='texture';else if(h===''||h==='#skins')packType='skin';
   const m=h.match(/^#\/pack\/(.+)$/);
   const p=m&&packs.find(x=>x.slug===decodeURIComponent(m[1]));
   const us=h.match(/^#\/user\/([A-Za-z0-9_]{3,20})$/);
@@ -1567,9 +1546,6 @@ function route(){
   window.scrollTo(0,0);
 }
 $('q').addEventListener('input',e=>renderList(e.target.value));
-// tabs just change the address, route() does the rest (so back button and links work)
-$('tab-skin').addEventListener('click',()=>{location.hash='#skins'});
-$('tab-texture').addEventListener('click',()=>{location.hash='#textures'});
 window.addEventListener('hashchange',route);
 function loadPacks(quiet){
   return Promise.all([
@@ -1578,7 +1554,7 @@ function loadPacks(quiet){
   ]).then(([a,b])=>{
     packs=a.concat(b);
     // on a normal refresh keep the scroll spot, dont jump to the top
-    if(quiet&&(location.hash===''||location.hash==='#skins'||location.hash==='#textures'))renderList($('q').value);else route();
+    if(quiet&&(location.hash===''||location.hash==='#skins'))renderList($('q').value);else route();
   }).catch(()=>{$('grid').textContent="Couldn't load the pack list. If you opened this file directly, try the live site instead."});
 }
 loadPacks();
