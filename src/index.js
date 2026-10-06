@@ -8,6 +8,10 @@ const LIMITS = {
   total: 20 * 1024 * 1024, // whole upload max
   maxPending: 3,           // pending packs one person can have at once
   anonTotal: 10 * 1024 * 1024, // anon upload whole thing max
+  bigFile: 150 * 1024 * 1024,  // one pack file sent in pieces (logged in only)
+  bigTotal: 300 * 1024 * 1024, // a whole pack that has big files
+  bigOpen: 6,                  // unfinished big uploads one person can have at once
+  bigOpenBytes: 2 * 1024 * 1024 * 1024, // unfinished big uploads site wide (keeps junk from filling R2)
   anonPerDay: 2,           // anon uploads per visitor per day
   anonMaxPending: 10,      // anon packs waiting for review site wide
   avatar: 256 * 1024,      // profile picture max size
@@ -791,7 +795,11 @@ async function adminStats(request, env) {
     one("SELECT COUNT(*) AS n FROM comments"),
     one("SELECT COUNT(*) AS n FROM reports WHERE status = 'open'"),
   ]);
-  return json({ users, approved, pending, denied, downloads, likes, comments, reports });
+  // total size of every pack file (R2 free plan holds 10 GB)
+  const storedBytes = await one(
+    "SELECT COALESCE(SUM(json_extract(j.value, '$.size')), 0) AS n FROM packs p, json_each(p.files) j"
+  );
+  return json({ users, approved, pending, denied, downloads, likes, comments, reports, storedBytes });
 }
 
 /* ---------- owner + admin tools: pack owners ---------- */
@@ -1017,8 +1025,8 @@ async function editMine(request, env, ctx) {
 
   let total = 0;
   for (const v of sizes.values()) total += v;
-  if (total > LIMITS.total) {
-    return json({ error: `That pack would be too big overall (max ${Math.round(LIMITS.total / 1048576)} MB).` }, 400);
+  if (total > LIMITS.bigTotal) {
+    return json({ error: `That pack would be too big overall (max ${Math.round(LIMITS.bigTotal / 1048576)} MB).` }, 400);
   }
 
   const wasDenied = row.status === "denied";
@@ -1222,9 +1230,32 @@ async function submit(request, env, ctx) {
   }
   tags.length = Math.min(tags.length, 5);
 
-  const id = [...crypto.getRandomValues(new Uint8Array(6))]
-    .map((b) => b.toString(16).padStart(2, "0"))
-    .join("");
+  // pack files over 5 MB were already sent in pieces (logged in only), find them
+  const bigFiles = new Map();
+  if (!anon) {
+    for (const pkey of Object.keys(PLATFORMS)) {
+      const bigId = String(form.get("big_" + pkey) || "");
+      if (!bigId) continue;
+      const br = await env.DB.prepare(
+        "SELECT * FROM big_uploads WHERE id = ? AND user_id = ? AND platform = ? AND status = 'done'"
+      ).bind(bigId, s.id, pkey).first();
+      if (!br) return json({ error: `The ${PLATFORMS[pkey]} file upload was lost. Please pick the file again.` }, 400);
+      bigFiles.set(pkey, br);
+    }
+  }
+  let id;
+  if (bigFiles.size) {
+    // the big files already sit in R2 under this pack id
+    id = [...bigFiles.values()][0].pack_id;
+    if ([...bigFiles.values()].some((b) => b.pack_id !== id)) {
+      return json({ error: "Those uploads do not belong together. Please pick the files again." }, 400);
+    }
+    if (await env.DB.prepare("SELECT id FROM packs WHERE id = ?").bind(id).first()) {
+      return json({ error: "That upload was already used. Please pick the files again." }, 400);
+    }
+  } else {
+    id = randHex(6);
+  }
   const slug = slugify(name) + "-" + id.slice(0, 4);
 
   const uploads = [];
@@ -1252,6 +1283,12 @@ async function submit(request, env, ctx) {
 
   const files = [];
   for (const pkey of Object.keys(PLATFORMS)) {
+    const bigRow = bigFiles.get(pkey);
+    if (bigRow) {
+      files.push({ platform: PLATFORMS[pkey], pkey, filename: bigRow.filename, size: bigRow.size });
+      total += bigRow.size;
+      continue;
+    }
     const f = form.get("file_" + pkey);
     if (!isFile(f)) continue;
     if (f.size > LIMITS.pack) {
@@ -1266,7 +1303,8 @@ async function submit(request, env, ctx) {
     total += f.size;
   }
   if (!files.length) return json({ error: "Please add at least one pack file." }, 400);
-  if (total > totalMax) return json({ error: `That upload is too big overall (max ${Math.round(totalMax / 1048576)} MB).` }, 400);
+  const cap = bigFiles.size ? LIMITS.bigTotal : totalMax;
+  if (total > cap) return json({ error: `That upload is too big overall (max ${Math.round(cap / 1048576)} MB).` }, 400);
 
   const done = [];
   try {
@@ -1284,6 +1322,10 @@ async function submit(request, env, ctx) {
       id, slug, name, description, JSON.stringify(tags), s.id, clean(s.name, 60),
       JSON.stringify(images), JSON.stringify(files), Math.floor(Date.now() / 1000), visitor, packType
     ).run();
+    // the big files now belong to a real pack
+    if (bigFiles.size) {
+      await env.DB.prepare("UPDATE big_uploads SET status = 'claimed' WHERE pack_id = ? AND user_id = ?").bind(id, s.id).run().catch(() => {});
+    }
   } catch (e) {
     await Promise.allSettled(done.map((k) => env.FILES.delete(k)));
     return json({ error: "Upload failed. Please try again." }, 500);
@@ -1551,6 +1593,7 @@ async function serveFile(request, env, url, ctx) {
       env.DB.prepare("UPDATE packs SET downloads = downloads + 1 WHERE id = ?").bind(id).run().catch(() => {})
     );
   }
+  if (obj.size) headers.set("Content-Length", String(obj.size));   // lets the browser show download progress
   return new Response(obj.body, { headers });
 }
 
@@ -1878,10 +1921,170 @@ async function saveNewsImage(request, env) {
 }
 
 /* ---------- router ---------- */
+/* ---------- big uploads: pack files over 5 MB go up in 8 MB pieces ----------
+   why: the free workers plan cant hold a 90 MB file in memory, so the browser slices the file
+   and every piece goes straight into an R2 multipart upload. only logged in people can do this.
+   table big_uploads tracks them: uploading -> done (all pieces in) -> claimed (pack submitted) */
+const PART_SIZE = 8 * 1024 * 1024;
+
+const randHex = (bytes) => [...crypto.getRandomValues(new Uint8Array(bytes))]
+  .map((b) => b.toString(16).padStart(2, "0")).join("");
+
+// throws away whatever R2 has for an unfinished/unused upload, then the row
+async function dropBigUpload(env, row) {
+  try {
+    if (row.status === "uploading") await env.FILES.resumeMultipartUpload(row.r2_key, row.r2_upload_id).abort();
+    else await env.FILES.delete(row.r2_key);
+  } catch {}
+  await env.DB.prepare("DELETE FROM big_uploads WHERE id = ?").bind(row.id).run().catch(() => {});
+}
+
+// POST /api/upload/start {filename, size, platform, packId?}
+async function bigStart(request, env, ctx) {
+  const s = await readSession(env, request);
+  if (!s) return json({ error: "Please log in to upload files over 5 MB." }, 401);
+  if (!sameOrigin(request, env)) return json({ error: "Bad origin." }, 403);
+  const body = await readJson(request);
+  if (!body) return json({ error: "Bad request." }, 400);
+
+  const pkey = String(body.platform || "");
+  if (!PLATFORMS[pkey]) return json({ error: "Unknown platform." }, 400);
+  const filename = safeName(body.filename);
+  if (BLOCKED_EXT.test(filename)) return json({ error: `The ${PLATFORMS[pkey]} file type isn't allowed.` }, 400);
+  const size = Number(body.size);
+  if (!Number.isInteger(size) || size < 1) return json({ error: "That file looks empty." }, 400);
+  if (size > LIMITS.bigFile) {
+    return json({ error: `The ${PLATFORMS[pkey]} file is too big (max ${Math.round(LIMITS.bigFile / 1048576)} MB).` }, 400);
+  }
+
+  // clear out old junk now and then (also runs when people browse)
+  ctx.waitUntil(purgeDenied(env));
+
+  // pack id: brand new, or the one from the first file of this same upload
+  let packId = String(body.packId || "");
+  let mine = [];
+  if (packId) {
+    if (!/^[a-f0-9]{12}$/.test(packId)) return json({ error: "That upload expired. Please pick the files again." }, 400);
+    mine = (await env.DB.prepare("SELECT * FROM big_uploads WHERE pack_id = ? AND user_id = ?").bind(packId, s.id).all()).results || [];
+    if (!mine.length || mine.some((r) => r.status === "claimed")) {
+      return json({ error: "That upload expired. Please pick the files again." }, 400);
+    }
+  } else {
+    do { packId = randHex(6); }
+    while (await env.DB.prepare("SELECT id FROM packs WHERE id = ?").bind(packId).first());
+  }
+
+  // picked a different file for the same platform? the old one goes away
+  for (const r of mine.filter((r) => r.platform === pkey)) await dropBigUpload(env, r);
+  mine = mine.filter((r) => r.platform !== pkey);
+
+  if (mine.reduce((a, r) => a + r.size, 0) + size > LIMITS.bigTotal) {
+    return json({ error: `That pack would be too big overall (max ${Math.round(LIMITS.bigTotal / 1048576)} MB).` }, 400);
+  }
+  const open = await env.DB.prepare(
+    "SELECT COUNT(*) AS n FROM big_uploads WHERE user_id = ? AND status != 'claimed'"
+  ).bind(s.id).first();
+  if (open.n >= LIMITS.bigOpen) {
+    return json({ error: "You have several unfinished uploads. Submit them, or wait a day and they clear out." }, 429);
+  }
+  const busy = await env.DB.prepare(
+    "SELECT COALESCE(SUM(size), 0) AS n FROM big_uploads WHERE status != 'claimed'"
+  ).first();
+  if (busy.n + size > LIMITS.bigOpenBytes) {
+    return json({ error: "Lots of big uploads are in progress right now. Please try again in a bit." }, 429);
+  }
+
+  const key = `${packId}/${pkey}/${filename}`;
+  let up;
+  try {
+    up = await env.FILES.createMultipartUpload(key, { httpMetadata: { contentType: "application/octet-stream" } });
+  } catch {
+    return json({ error: "Could not start the upload. Please try again." }, 500);
+  }
+  const rowId = randHex(6);
+  await env.DB.prepare(
+    `INSERT INTO big_uploads (id, pack_id, user_id, platform, filename, size, r2_key, r2_upload_id, status, created_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'uploading', ?)`
+  ).bind(rowId, packId, s.id, pkey, filename, size, key, up.uploadId, Math.floor(Date.now() / 1000)).run();
+  return json({ ok: true, uploadId: rowId, packId, partSize: PART_SIZE, parts: Math.ceil(size / PART_SIZE) });
+}
+
+// POST /api/upload/part?id=<uploadId>&n=<piece number>   body = the raw bytes of that piece
+async function bigPart(request, env, url) {
+  const s = await readSession(env, request);
+  if (!s) return json({ error: "Please log in first." }, 401);
+  if (!sameOrigin(request, env)) return json({ error: "Bad origin." }, 403);
+  const row = await env.DB.prepare(
+    "SELECT * FROM big_uploads WHERE id = ? AND user_id = ? AND status = 'uploading'"
+  ).bind(String(url.searchParams.get("id") || ""), s.id).first();
+  if (!row) return json({ error: "That upload was not found. Please pick the file again." }, 404);
+
+  const total = Math.ceil(row.size / PART_SIZE);
+  const n = Number(url.searchParams.get("n"));
+  if (!Number.isInteger(n) || n < 1 || n > total) return json({ error: "Bad piece number." }, 400);
+  // every piece is exactly 8 MB except the last one
+  const expect = n < total ? PART_SIZE : row.size - PART_SIZE * (total - 1);
+  const len = Number(request.headers.get("Content-Length") || 0);
+  if (len && len !== expect) return json({ error: "That piece is the wrong size. Please try again." }, 400);
+  const buf = await request.arrayBuffer();
+  if (buf.byteLength !== expect) return json({ error: "That piece is the wrong size. Please try again." }, 400);
+
+  try {
+    const part = await env.FILES.resumeMultipartUpload(row.r2_key, row.r2_upload_id).uploadPart(n, buf);
+    return json({ ok: true, etag: part.etag });
+  } catch {
+    return json({ error: "Storing that piece failed. Please try again." }, 500);
+  }
+}
+
+// POST /api/upload/finish {id, parts: [{partNumber, etag}]}
+async function bigFinish(request, env) {
+  const s = await readSession(env, request);
+  if (!s) return json({ error: "Please log in first." }, 401);
+  if (!sameOrigin(request, env)) return json({ error: "Bad origin." }, 403);
+  const body = await readJson(request);
+  if (!body) return json({ error: "Bad request." }, 400);
+  const row = await env.DB.prepare(
+    "SELECT * FROM big_uploads WHERE id = ? AND user_id = ? AND status = 'uploading'"
+  ).bind(String(body.id || ""), s.id).first();
+  if (!row) return json({ error: "That upload was not found. Please pick the file again." }, 404);
+
+  const total = Math.ceil(row.size / PART_SIZE);
+  const parts = Array.isArray(body.parts) ? body.parts : [];
+  const ok = parts.length === total && parts.every((p, i) =>
+    p && p.partNumber === i + 1 && typeof p.etag === "string" && p.etag.length > 0 && p.etag.length <= 128);
+  if (!ok) return json({ error: "Some pieces are missing. Please pick the file again." }, 400);
+
+  let obj;
+  try {
+    obj = await env.FILES.resumeMultipartUpload(row.r2_key, row.r2_upload_id)
+      .complete(parts.map((p) => ({ partNumber: p.partNumber, etag: p.etag })));
+  } catch {
+    return json({ error: "Could not finish the upload. Please pick the file again." }, 400);
+  }
+  // the stored file has to be the size they said it was
+  if (obj.size !== row.size) {
+    await env.FILES.delete(row.r2_key).catch(() => {});
+    await env.DB.prepare("DELETE FROM big_uploads WHERE id = ?").bind(row.id).run();
+    return json({ error: "The file came out the wrong size. Please try again." }, 400);
+  }
+  await env.DB.prepare("UPDATE big_uploads SET status = 'done' WHERE id = ?").bind(row.id).run();
+  return json({ ok: true });
+}
+
 /* ---------- cleanup: denied packs ----------
    denied packs nobody touched for 30 days lose their R2 files (the row and the deny reason stay).
    runs by itself now and then, no cron needed. if the creator edits it later they add files again */
 async function purgeDenied(env) {
+  try {
+    // big uploads nobody finished or submitted for a day, and old bookkeeping rows
+    const nowSec = Math.floor(Date.now() / 1000);
+    const stale = await env.DB.prepare(
+      "SELECT * FROM big_uploads WHERE status != 'claimed' AND created_at < ? LIMIT 5"
+    ).bind(nowSec - 86400).all();
+    for (const r of stale.results || []) await dropBigUpload(env, r);
+    await env.DB.prepare("DELETE FROM big_uploads WHERE status = 'claimed' AND created_at < ?").bind(nowSec - 7 * 86400).run();
+  } catch {}
   try {
     const cutoff = Math.floor(Date.now() / 1000) - 30 * 86400;
     const { results } = await env.DB.prepare(
@@ -1940,6 +2143,9 @@ async function route(request, env, ctx) {
   if (p === "/api/my/delete" && m === "POST") return deleteMine(request, env);
   if (p === "/api/my/edit" && m === "POST") return editMine(request, env, ctx);
   if (p === "/api/submit" && m === "POST") return submit(request, env, ctx);
+  if (p === "/api/upload/start" && m === "POST") return bigStart(request, env, ctx);
+  if (p === "/api/upload/part" && m === "POST") return bigPart(request, env, url);
+  if (p === "/api/upload/finish" && m === "POST") return bigFinish(request, env);
   if (p === "/api/admin/list" && m === "GET") return adminList(request, env, url);
   if (p === "/api/admin/review" && m === "POST") return review(request, env);
     if (p === "/api/report" && m === "POST") return report(request, env, ctx);
