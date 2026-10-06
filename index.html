@@ -109,8 +109,10 @@ input[type=file]{width:100%;font:inherit;font-size:var(--t);color:#cfc8bf;backgr
 .panel .card{background:#b4b4b4;border-color:#555 #fff #fff #555}
 .panel .card .name{color:#202020}
 /* account card top right (only when logged in) */
-.acctbar{display:flex;justify-content:flex-end}
-.acctbar:not(:empty){margin-bottom:8px}
+.topbar{display:flex;justify-content:space-between;align-items:flex-start;gap:12px;margin-bottom:8px}
+.acctbar{display:flex;justify-content:flex-end;margin-left:auto}
+.btn.annbtn{flex:none;width:48px;height:48px;min-width:0;padding:0;display:flex;align-items:center;justify-content:center}
+.annbtn img{width:32px;height:32px;image-rendering:pixelated}
 .acct{display:flex;align-items:center;gap:12px;max-width:100%;background:#c6c6c6;color:#404040;text-decoration:none;font-size:var(--t);
   border:4px solid;border-color:#fff #555 #555 #fff;outline:3px solid #000;padding:8px 12px}
 .acct:hover,.acct:focus-visible{background:#a0a4d8;color:var(--gold);outline-color:#fff}
@@ -145,7 +147,10 @@ footer{margin-top:8px;font-size:var(--t);color:#cfc8bf;text-shadow:2px 2px 0 #00
 </head>
 <body>
 <div class="wrap">
-  <div class="acctbar" id="acctbar"></div>
+  <div class="topbar">
+    <button class="btn annbtn" id="annbtn" type="button" aria-label="Announcements" title="Announcements"><img src="images/announcements.png" alt="" width="32" height="32"></button>
+    <div class="acctbar" id="acctbar"></div>
+  </div>
   <h1><img class="logo" src="images/logo.png" alt="Skin Central" width="1290" height="168"><span class="splash">Now with sound!</span></h1>
   <p class="sub">Legacy Console Edition skins, one click away.</p>
 
@@ -156,7 +161,6 @@ footer{margin-top:8px;font-size:var(--t);color:#cfc8bf;text-shadow:2px 2px 0 #00
     <a class="btn" href="#/rules">Rules</a>
     <a class="btn" href="https://discord.gg/atQA5ecyxj">Join the Discord</a>
     <a class="btn" id="login" href="/auth/login">Log in with Discord</a>
-    <button class="btn" id="mute" type="button">Sound: On</button>
   </div>
 
   <section class="panel" id="skins">
@@ -171,6 +175,7 @@ footer{margin-top:8px;font-size:var(--t);color:#cfc8bf;text-shadow:2px 2px 0 #00
   <section class="panel doc" id="rules" hidden></section>
   <section class="panel doc" id="tutorials" hidden></section>
   <section class="panel doc" id="account" hidden></section>
+  <section class="panel doc" id="owner" hidden></section>
 
   <footer>Fan-made community site. Not affiliated with Mojang or Microsoft. <a href="#/rules">Rules</a></footer>
 </div>
@@ -178,9 +183,8 @@ footer{margin-top:8px;font-size:var(--t);color:#cfc8bf;text-shadow:2px 2px 0 #00
 <script>
 
 /* ---------- sounds ---------- */
-let ctx=null,muted=false;
+let ctx=null;
 function tone(freq,dur,type,vol,slideTo){
-  if(muted)return;
   // browsers block audio until you click something once
   if(!(navigator.userActivation&&navigator.userActivation.hasBeenActive))return;
   ctx=ctx||new (window.AudioContext||window.webkitAudioContext)();
@@ -195,11 +199,11 @@ const clickAudio=new Audio('sounds/click.mp3');clickAudio.preload='auto';
 const hoverAudio=new Audio('sounds/hover.mp3');hoverAudio.preload='auto';
 const sfx={
   hover:()=>{
-    if(muted||!(navigator.userActivation&&navigator.userActivation.hasBeenActive))return;
+    if(!(navigator.userActivation&&navigator.userActivation.hasBeenActive))return;
     const a=hoverAudio.cloneNode();a.volume=.5;a.play().catch(()=>{});
   },
   click:()=>{
-    if(muted||!(navigator.userActivation&&navigator.userActivation.hasBeenActive))return;
+    if(!(navigator.userActivation&&navigator.userActivation.hasBeenActive))return;
     const a=clickAudio.cloneNode();a.volume=.6;a.play().catch(()=>{});
   },
   done:()=>[523,659,784].forEach((f,i)=>setTimeout(()=>tone(f,.12,'triangle',.07),i*90))
@@ -213,8 +217,6 @@ document.addEventListener('click',e=>{
   if(!b)return;
   b.hasAttribute('download')?sfx.done():sfx.click();
 });
-const muteBtn=document.getElementById('mute');
-muteBtn.addEventListener('click',()=>{muted=!muted;muteBtn.textContent='Sound: '+(muted?'Off':'On')});
 
 /* ---------- pack list + pack pages ----------
    packs come from packs.json + the database. everything is built with textContent so
@@ -700,6 +702,79 @@ function showTutorials(){
     el('div',{class:'dl'},el('a',{class:'btn',href:'https://gamebanana.com/dl/985300',target:'_blank',rel:'noopener noreferrer',text:'Download PCK Studio'})));
 }
 
+/* ---------- announcements (the bell button top left) ----------
+   the text lives in the database now, the owner panel (#/owner) edits it.
+   this list is only the backup if the server cant be reached */
+const NEWS={title:'Welcome back!',intro:"Here's what's new:",items:[
+  'Packs now have likes, comments and download counts.',
+  'You can edit or delete your own packs from your account.',
+  'Moderators can edit and delete any pack.',
+  'You can upload without logging in.',
+  'The new Tools page has PCK Studio and the tutorials.'
+]};
+function showNews(data){
+  const esc=e=>{if(e.key==='Escape')close()};
+  const close=()=>{ov.remove();document.removeEventListener('keydown',esc)};
+  const done=el('button',{class:'btn',type:'button',text:'Done'});
+  const ov=el('div',{class:'modal'},
+    el('div',{class:'panel',role:'dialog','aria-modal':'true','aria-labelledby':'news-title'},
+      el('h2',{id:'news-title',text:data.title}),
+      data.intro?el('p',{class:'callout',text:data.intro}):null,
+      ...data.items.map(t=>el('p',{text:'- '+t})),
+      el('div',{class:'dl'},done)));
+  done.addEventListener('click',close);
+  ov.addEventListener('click',e=>{if(e.target===ov)close()});
+  document.addEventListener('keydown',esc);
+  document.body.append(ov);
+  done.focus();
+}
+// grabs the newest text every time the bell gets clicked
+document.getElementById('annbtn').addEventListener('click',()=>{
+  fetch('/api/news',{cache:'no-store'}).then(r=>r.ok?r.json():Promise.reject()).catch(()=>NEWS).then(showNews);
+});
+
+/* ---------- owner panel (#/owner) ----------
+   only mods can open it for now, once the owner account exists it will be owner only */
+function showOwner(){
+  const o=$('owner');o.textContent='';document.title='Owner panel | Skin Central';
+  o.append(el('h2',{text:'Owner panel'}));
+  meP.then(me=>{
+    if(!me.loggedIn||!me.isMod){o.append(el('p',{text:'You do not have access to this page.'}));return}
+    const title=el('input',{type:'text',maxlength:'40','aria-label':'Box title'});
+    const intro=el('input',{type:'text',maxlength:'80','aria-label':'Line under the title'});
+    const items=el('textarea',{rows:'8','aria-label':'Announcements, one per line'});
+    const msg=el('p',{class:'msg',role:'status'});
+    const save=el('button',{class:'btn',type:'button',text:'Save'});
+    const preview=el('button',{class:'btn',type:'button',text:'Preview'});
+    const say=(t,ok)=>{msg.className='msg '+(ok?'ok':'err');msg.textContent=t};
+    const read=()=>({title:title.value,intro:intro.value,items:items.value.split('\n').map(x=>x.trim()).filter(Boolean).slice(0,12)});
+    o.append(
+      el('h3',{text:'Announcements'}),
+      el('p',{class:'hint',text:'This is the box that opens from the bell button at the top left. Changes show up for everyone right away.'}),
+      el('label',{text:'Title'}),title,
+      el('label',{text:'Line under the title (optional)'}),intro,
+      el('label',{text:'Announcements (one per line, up to 12)'}),items,
+      el('div',{class:'dl'},save,preview),msg);
+    fetch('/api/news',{cache:'no-store'}).then(r=>r.json()).then(d=>{
+      title.value=d.title||'';intro.value=d.intro||'';items.value=(d.items||[]).join('\n');
+    }).catch(()=>say('Could not load the current text.'));
+    preview.addEventListener('click',()=>{const d=read();if(!d.title.trim()){say('Add a title first.');return}showNews(d)});
+    save.addEventListener('click',async()=>{
+      msg.textContent='';
+      const d=read();
+      if(!d.title.trim())return say('The title cant be empty.');
+      save.disabled=true;
+      try{
+        const r=await fetch('/api/admin/news',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(d)});
+        const j=await r.json().catch(()=>({}));
+        if(r.ok&&j.ok){title.value=j.title;intro.value=j.intro;items.value=j.items.join('\n');say('Saved.',true)}
+        else say(j.error||'That did not work.');
+      }catch{say('Network problem. Try again.')}
+      save.disabled=false;
+    });
+  });
+}
+
 /* are you sure popup, onYes() only runs if they hit the yes button */
 function askConfirm(title,text,yesText,onYes){
   const esc=e=>{if(e.key==='Escape')close()};
@@ -870,9 +945,9 @@ function route(){
   const h=location.hash;
   const m=h.match(/^#\/pack\/(.+)$/);
   const p=m&&packs.find(x=>x.slug===decodeURIComponent(m[1]));
-  const up=h==='#/upload',ad=h==='#/admin',ru=h==='#/rules',tu=h==='#/tutorials',ac=h==='#/account';
-  $('skins').hidden=!!p||up||ad||ru||tu||ac;$('detail').hidden=!p;$('upload').hidden=!up;$('admin').hidden=!ad;$('rules').hidden=!ru;$('tutorials').hidden=!tu;$('account').hidden=!ac;
-  ad?showAdmin():up?showUpload():ru?showRules():tu?showTutorials():ac?showAccount():p?showPack(p):renderList($('q').value);
+  const up=h==='#/upload',ad=h==='#/admin',ru=h==='#/rules',tu=h==='#/tutorials',ac=h==='#/account',ow=h==='#/owner';
+  $('skins').hidden=!!p||up||ad||ru||tu||ac||ow;$('detail').hidden=!p;$('upload').hidden=!up;$('admin').hidden=!ad;$('rules').hidden=!ru;$('tutorials').hidden=!tu;$('account').hidden=!ac;$('owner').hidden=!ow;
+  ad?showAdmin():up?showUpload():ru?showRules():tu?showTutorials():ac?showAccount():ow?showOwner():p?showPack(p):renderList($('q').value);
   window.scrollTo(0,0);
 }
 $('q').addEventListener('input',e=>renderList(e.target.value));
@@ -910,7 +985,10 @@ meP.then(me=>{
   }
   $('acctbar').append(el('a',{class:'acct',href:'#/account',title:'My account'},pic,
     el('span',{class:'who'},el('span',{text:me.user.name}),el('small',{text:me.isMod?'Moderator':'My account'}))));
-  if(me.isMod)b.insertAdjacentElement('afterend',el('a',{class:'btn',href:'#/admin',text:'Moderation'}));
+  if(me.isMod){
+    b.insertAdjacentElement('afterend',el('a',{class:'btn',href:'#/owner',text:'Owner panel'}));
+    b.insertAdjacentElement('afterend',el('a',{class:'btn',href:'#/admin',text:'Moderation'}));
+  }
 }).catch(()=>{});
 
 /* ---------- random splash text ----------
