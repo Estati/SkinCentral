@@ -138,6 +138,17 @@ async function readSession(env, request) {
     if (!ok) return null;
     const data = JSON.parse(new TextDecoder().decode(fromB64url(payload)));
     if (data.exp < Date.now() / 1000) return null;
+    // site accounts (ids like u1a2b3c4d5e6f): look them up every time so a ban or a role change
+    // works right away. discord ids are only digits and keep the old cookie based check for now
+    if (/^u[0-9a-f]{12}$/.test(String(data.id))) {
+      const u = await env.DB.prepare(
+        "SELECT username, role, banned FROM users WHERE id = ?"
+      ).bind(data.id).first();
+      if (!u || u.banned) return null;
+      data.name = u.username;
+      data.role = u.role;
+      data.mod = u.role === "mod" || u.role === "owner";
+    }
     return data;
   } catch {
     return null;
@@ -405,6 +416,128 @@ async function loginPassword(request, env) {
   // right password clears that usernames counter (the connection counter stays)
   await env.DB.prepare("DELETE FROM login_attempts WHERE key = ?").bind(userKey).run().catch(() => {});
   return startSession(env, u);
+}
+
+/* ---------- one time owner setup (/admin/setup) ----------
+   only works while no owner exists AND you know the SETUP_KEY secret */
+async function ownerExists(env) {
+  const r = await env.DB.prepare("SELECT id FROM users WHERE role = 'owner' LIMIT 1").first();
+  return !!r;
+}
+
+function setupPage(msg, status = 200) {
+  const note = msg ? `<p class="err">${msg}</p>` : "";
+  const html = `<!doctype html>
+<html lang="en"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="robots" content="noindex">
+<title>Owner setup | Skin Central</title>
+<style>
+@font-face{font-family:Mojang;src:url(/fonts/Mojang-Regular.ttf)}
+*{box-sizing:border-box}
+body{margin:0;min-height:100vh;display:flex;align-items:center;justify-content:center;padding:16px;
+  background:#4a3426 url(/images/dirt.png);background-size:128px;font-family:Mojang,monospace;font-size:16px;color:#222}
+form{background:#c6c6c6;border:3px solid;border-color:#fff #555 #555 #fff;outline:3px solid #000;padding:24px;max-width:480px;width:100%}
+h1{font-size:24px;margin:0 0 12px}
+p{margin:0 0 12px}
+label{display:block;margin:16px 0 8px}
+input{width:100%;font:inherit;color:#fff;background:#000;padding:8px 12px;border:3px solid #6d6d6d}
+button{margin-top:24px;width:100%;font:inherit;color:#fff;background:#6d6d6d;padding:10px;border:3px solid;border-color:#bbb #333 #333 #bbb;cursor:pointer}
+.err{color:#a00000}
+</style></head><body>
+<form method="post" action="/admin/setup" autocomplete="off">
+<h1>Owner setup</h1>
+<p>This creates the one and only owner account, named SkinCentral. It stops working once the owner exists.</p>
+${note}
+<label for="pw">Owner password (12+ characters)</label>
+<input id="pw" name="password" type="password" maxlength="128" autocomplete="new-password" required>
+<label for="pw2">Repeat password</label>
+<input id="pw2" name="password2" type="password" maxlength="128" autocomplete="new-password" required>
+<label for="key">Setup key</label>
+<input id="key" name="key" type="password" maxlength="200" autocomplete="off" required>
+<button type="submit">Create owner account</button>
+</form></body></html>`;
+  return new Response(html, {
+    status,
+    headers: {
+      "Content-Type": "text/html; charset=utf-8",
+      "Cache-Control": "no-store",
+      "Content-Security-Policy":
+        "default-src 'none'; style-src 'unsafe-inline'; img-src 'self'; font-src 'self'; form-action 'self'; base-uri 'none'; frame-ancestors 'none'",
+    },
+  });
+}
+
+async function setupShow(env) {
+  if (!env.SETUP_KEY || (await ownerExists(env))) return notFound();
+  return setupPage("");
+}
+
+async function setupSubmit(request, env) {
+  if (!env.SETUP_KEY || !env.PASSWORD_PEPPER || (await ownerExists(env))) return notFound();
+  if (!sameOrigin(request, env)) return json({ error: "Bad origin." }, 403);
+  const len = Number(request.headers.get("Content-Length") || 0);
+  if (len > 4096) return setupPage("That was too big.", 413);
+
+  let form;
+  try {
+    form = await request.formData();
+  } catch {
+    return setupPage("That did not look right. Try again.", 400);
+  }
+  const password = String(form.get("password") || "");
+  const password2 = String(form.get("password2") || "");
+  const key = String(form.get("key") || "");
+
+  // 5 wrong setup keys per connection per 15 minutes
+  const now = Math.floor(Date.now() / 1000);
+  const tag = await visitorTag(request, env);
+  const limitKey = "setup:" + tag;
+  if ((await countAttempts(env, limitKey, now - 900)) >= 5) {
+    return setupPage("Too many wrong tries. Wait 15 minutes.", 429);
+  }
+
+  // compare the key without leaking how much of it matched (both sides get scrambled first)
+  const hk = await hmacKey(env.SESSION_SECRET);
+  const a = toB64url(await crypto.subtle.sign("HMAC", hk, enc.encode("setup:" + key)));
+  const b = toB64url(await crypto.subtle.sign("HMAC", hk, enc.encode("setup:" + env.SETUP_KEY)));
+  if (!sameText(a, b)) {
+    await addAttempt(env, limitKey, now);
+    return setupPage("That setup key is not right.", 403);
+  }
+
+  if (password.length < 12) return setupPage("The password needs at least 12 characters.", 400);
+  if (password.length > 128) return setupPage("That password is too long (128 max).", 400);
+  if (password !== password2) return setupPage("The two passwords do not match.", 400);
+
+  const salt = crypto.getRandomValues(new Uint8Array(16));
+  const hash = await hashPassword(env, password, salt, PBKDF2_ROUNDS);
+  const passHash = `pbkdf2-sha256$${PBKDF2_ROUNDS}$${toB64url(salt)}$${hash}`;
+  const id = "u" + [...crypto.getRandomValues(new Uint8Array(6))].map((x) => x.toString(16).padStart(2, "0")).join("");
+
+  // the WHERE NOT EXISTS part makes sure two people cant both become owner at once
+  let res;
+  try {
+    res = await env.DB.prepare(
+      `INSERT INTO users (id, username, username_lc, pass_hash, role, banned, created_at)
+       SELECT ?, 'SkinCentral', 'skincentral', ?, 'owner', 0, ?
+       WHERE NOT EXISTS (SELECT 1 FROM users WHERE role = 'owner')`
+    ).bind(id, passHash, now).run();
+  } catch (e) {
+    if (/UNIQUE/i.test(String(e))) return setupPage("A user named SkinCentral already exists. Ask me how to fix that.", 409);
+    throw e;
+  }
+  if (!res.meta || res.meta.changes !== 1) return notFound();
+
+  // log the new owner in and send them to the home page
+  const maxAge = 60 * 60 * 24;
+  const token = await signSession(env, {
+    id, name: "SkinCentral", avatar: null, mod: true, role: "owner",
+    exp: now + maxAge,
+  });
+  const headers = new Headers({ Location: env.SITE_URL + "/" });
+  headers.append("Set-Cookie", cookie("session", token, maxAge));
+  return new Response(null, { status: 303, headers });
 }
 
 /* ---------- packs ---------- */
@@ -1300,7 +1433,7 @@ async function newsImage(env) {
 // save the announcement text (mods for now, owner only once the owner account exists)
 async function saveNews(request, env) {
   const s = await readSession(env, request);
-  if (!s || !s.mod) return json({ error: "Moderators only." }, 403);
+  if (!s || s.role !== "owner") return json({ error: "Owner only." }, 403);
   if (!sameOrigin(request, env)) return json({ error: "Bad origin." }, 403);
   let body;
   try {
@@ -1323,7 +1456,7 @@ async function saveNews(request, env) {
 // change or remove the banner image (multipart: "file", or remove=1)
 async function saveNewsImage(request, env) {
   const s = await readSession(env, request);
-  if (!s || !s.mod) return json({ error: "Moderators only." }, 403);
+  if (!s || s.role !== "owner") return json({ error: "Owner only." }, 403);
   if (!sameOrigin(request, env)) return json({ error: "Bad origin." }, 403);
   if (Number(request.headers.get("Content-Length") || 0) > NEWS_IMAGE_MAX + 64 * 1024) {
     return json({ error: "That image is too big (max 1 MB)." }, 413);
@@ -1363,6 +1496,8 @@ async function route(request, env, ctx) {
   if (p === "/api/me") return me(request, env);
   if (p === "/api/signup" && m === "POST") return signup(request, env);
   if (p === "/api/login" && m === "POST") return loginPassword(request, env);
+  if (p === "/admin/setup" && m === "GET") return setupShow(env);
+  if (p === "/admin/setup" && m === "POST") return setupSubmit(request, env);
   if (p === "/api/packs" && m === "GET") return listPacks(env);
   if (p === "/api/my" && m === "GET") return myPacks(request, env);
   if (p === "/api/social" && m === "GET") return packSocial(request, env, url);
