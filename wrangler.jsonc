@@ -9,8 +9,6 @@
   },
   "vars": {
     "SITE_URL": "https://skincentral.estatic.cc",
-    "DISCORD_CLIENT_ID": "1556006055677268008",
-    "GUILD_ID": "1353549460680085525",
     "MOD_ROLE_ID": "1556006566497624074"
   },
   "d1_databases": [
