@@ -540,6 +540,88 @@ async function setupSubmit(request, env) {
   return new Response(null, { status: 303, headers });
 }
 
+/* ---------- owner tools: users, roles, bans ---------- */
+// writes a line in the mod log table (shown in the owner panel later)
+async function logAction(env, s, action, target, detail) {
+  await env.DB.prepare(
+    "INSERT INTO mod_log (actor_id, actor_name, action, target, detail, created_at) VALUES (?, ?, ?, ?, ?, ?)"
+  ).bind(s.id, clean(s.name, 60), action, clean(target, 80), clean(detail, 200), Math.floor(Date.now() / 1000)).run().catch(() => {});
+}
+
+// GET /api/admin/users?q=name  -> up to 50 accounts, newest first
+async function adminUsers(request, env, url) {
+  const s = await readSession(env, request);
+  if (!s || s.role !== "owner") return json({ error: "Owner only." }, 403);
+  const q = clean(url.searchParams.get("q"), 20).toLowerCase();
+  let res;
+  if (q) {
+    // escape % and _ so they search as normal letters
+    const like = "%" + q.replace(/[\\%_]/g, (c) => "\\" + c) + "%";
+    res = await env.DB.prepare(
+      "SELECT id, username, role, banned, created_at FROM users WHERE username_lc LIKE ? ESCAPE '\\' ORDER BY created_at DESC LIMIT 51"
+    ).bind(like).all();
+  } else {
+    res = await env.DB.prepare(
+      "SELECT id, username, role, banned, created_at FROM users ORDER BY created_at DESC LIMIT 51"
+    ).all();
+  }
+  const rows = res.results || [];
+  return json({
+    users: rows.slice(0, 50).map((u) => ({
+      id: u.id,
+      username: u.username,
+      role: u.role,
+      banned: !!u.banned,
+      created: u.created_at,
+    })),
+    more: rows.length > 50,
+  });
+}
+
+// looks up the account an owner action is aimed at, null + error response if its not allowed
+async function targetUser(env, s, id) {
+  const u = await env.DB.prepare("SELECT id, username, role, banned FROM users WHERE id = ?")
+    .bind(String(id || "")).first();
+  if (!u) return { err: json({ error: "That account does not exist." }, 404) };
+  if (u.id === s.id) return { err: json({ error: "You can not change your own account here." }, 400) };
+  if (u.role === "owner") return { err: json({ error: "The owner account can not be changed." }, 400) };
+  return { u };
+}
+
+// POST /api/admin/user-role  {id, role: "mod" or "user"}
+async function setUserRole(request, env) {
+  const s = await readSession(env, request);
+  if (!s || s.role !== "owner") return json({ error: "Owner only." }, 403);
+  if (!sameOrigin(request, env)) return json({ error: "Bad origin." }, 403);
+  const body = await readJson(request);
+  if (!body) return json({ error: "Bad request." }, 400);
+  const role = body.role === "mod" ? "mod" : body.role === "user" ? "user" : null;
+  if (!role) return json({ error: "Pick moderator or user." }, 400);
+  const t = await targetUser(env, s, body.id);
+  if (t.err) return t.err;
+  if (t.u.banned && role === "mod") return json({ error: "Unban that account before making it a moderator." }, 400);
+  await env.DB.prepare("UPDATE users SET role = ? WHERE id = ?").bind(role, t.u.id).run();
+  await logAction(env, s, role === "mod" ? "promoted to moderator" : "demoted to user", t.u.username, "");
+  return json({ ok: true, role });
+}
+
+// POST /api/admin/user-ban  {id, banned: true/false}
+async function setUserBan(request, env) {
+  const s = await readSession(env, request);
+  if (!s || s.role !== "owner") return json({ error: "Owner only." }, 403);
+  if (!sameOrigin(request, env)) return json({ error: "Bad origin." }, 403);
+  const body = await readJson(request);
+  if (!body) return json({ error: "Bad request." }, 400);
+  const banned = body.banned === true;
+  const t = await targetUser(env, s, body.id);
+  if (t.err) return t.err;
+  // a banned moderator also loses the role so unbanning doesnt hand it back
+  await env.DB.prepare("UPDATE users SET banned = ?, role = CASE WHEN ? = 1 THEN 'user' ELSE role END WHERE id = ?")
+    .bind(banned ? 1 : 0, banned ? 1 : 0, t.u.id).run();
+  await logAction(env, s, banned ? "banned" : "unbanned", t.u.username, "");
+  return json({ ok: true, banned });
+}
+
 /* ---------- packs ---------- */
 // turns a database row into the same shape as packs.json
 function packView(r) {
@@ -1496,6 +1578,9 @@ async function route(request, env, ctx) {
   if (p === "/api/me") return me(request, env);
   if (p === "/api/signup" && m === "POST") return signup(request, env);
   if (p === "/api/login" && m === "POST") return loginPassword(request, env);
+  if (p === "/api/admin/users" && m === "GET") return adminUsers(request, env, url);
+  if (p === "/api/admin/user-role" && m === "POST") return setUserRole(request, env);
+  if (p === "/api/admin/user-ban" && m === "POST") return setUserBan(request, env);
   if (p === "/admin/setup" && m === "GET") return setupShow(env);
   if (p === "/admin/setup" && m === "POST") return setupSubmit(request, env);
   if (p === "/api/packs" && m === "GET") return listPacks(env);
