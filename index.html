@@ -111,7 +111,13 @@ input[type=file]{width:100%;font:inherit;font-size:var(--t);color:#cfc8bf;backgr
 /* account card top right (only when logged in) */
 .topbar{display:flex;justify-content:space-between;align-items:flex-start;gap:12px;margin-bottom:8px}
 .acctbar{display:flex;justify-content:flex-end;margin-left:auto}
-.btn.annbtn{flex:none;width:48px;height:48px;min-width:0;padding:0;display:flex;align-items:center;justify-content:center}
+.btn.annbtn{flex:none;position:relative;width:48px;height:48px;min-width:0;padding:0;display:flex;align-items:center;justify-content:center}
+.newdot{position:absolute;top:-8px;right:-8px;width:16px;height:16px;background:#d83030;border:3px solid #000}
+/* dark inset box (text in the whats new popup) + banner image */
+.inset{background:#555;color:#fff;border:4px solid;border-color:#333 #fff #fff #333;padding:16px;margin:0 0 16px}
+.modal .panel .inset p{color:#fff;margin:0 0 12px}
+.modal .panel .inset p:last-child{margin:0}
+.newsimg{display:block;width:100%;max-height:240px;object-fit:cover;image-rendering:auto;background:#222;border:4px solid;border-color:#555 #fff #fff #555;margin:0 0 16px}
 .annbtn img{width:32px;height:32px;image-rendering:pixelated}
 .acct{display:flex;align-items:center;gap:12px;max-width:100%;background:#c6c6c6;color:#404040;text-decoration:none;font-size:var(--t);
   border:4px solid;border-color:#fff #555 #555 #fff;outline:3px solid #000;padding:8px 12px}
@@ -148,7 +154,7 @@ footer{margin-top:8px;font-size:var(--t);color:#cfc8bf;text-shadow:2px 2px 0 #00
 <body>
 <div class="wrap">
   <div class="topbar">
-    <button class="btn annbtn" id="annbtn" type="button" aria-label="Announcements" title="Announcements"><img src="images/announcements.png" alt="" width="32" height="32"></button>
+    <button class="btn annbtn" id="annbtn" type="button" aria-label="Announcements" title="Announcements"><img src="images/announcements.png" alt="" width="32" height="32"><span class="newdot" id="newdot" hidden></span></button>
     <div class="acctbar" id="acctbar"></div>
   </div>
   <h1><img class="logo" src="images/logo.png" alt="Skin Central" width="1290" height="168"><span class="splash">Now with sound!</span></h1>
@@ -703,8 +709,8 @@ function showTutorials(){
 }
 
 /* ---------- announcements (the bell button top left) ----------
-   the text lives in the database now, the owner panel (#/owner) edits it.
-   this list is only the backup if the server cant be reached */
+   the text + banner image live in the database, the owner panel (#/owner) edits them.
+   NEWS is only the backup if the server cant be reached */
 const NEWS={title:'Welcome back!',intro:"Here's what's new:",items:[
   'Packs now have likes, comments and download counts.',
   'You can edit or delete your own packs from your account.',
@@ -712,26 +718,38 @@ const NEWS={title:'Welcome back!',intro:"Here's what's new:",items:[
   'You can upload without logging in.',
   'The new Tools page has PCK Studio and the tutorials.'
 ]};
-function showNews(data){
+const SEEN_KEY='sc_news_seen';   // remembers which version of the announcements this browser already opened
+function showNews(data,markSeen){
   const esc=e=>{if(e.key==='Escape')close()};
   const close=()=>{ov.remove();document.removeEventListener('keydown',esc)};
   const done=el('button',{class:'btn',type:'button',text:'Done'});
   const ov=el('div',{class:'modal'},
     el('div',{class:'panel',role:'dialog','aria-modal':'true','aria-labelledby':'news-title'},
+      data.image?el('img',{class:'newsimg',src:'/api/news/image?v='+(data.updated||0),alt:''}):null,
       el('h2',{id:'news-title',text:data.title}),
       data.intro?el('p',{class:'callout',text:data.intro}):null,
-      ...data.items.map(t=>el('p',{text:'- '+t})),
+      el('div',{class:'inset'},...data.items.map(t=>el('p',{text:'- '+t}))),
       el('div',{class:'dl'},done)));
   done.addEventListener('click',close);
   ov.addEventListener('click',e=>{if(e.target===ov)close()});
   document.addEventListener('keydown',esc);
   document.body.append(ov);
   done.focus();
+  if(markSeen){
+    try{localStorage.setItem(SEEN_KEY,String(data.updated||0))}catch{}
+    document.getElementById('newdot').hidden=true;
+  }
 }
 // grabs the newest text every time the bell gets clicked
 document.getElementById('annbtn').addEventListener('click',()=>{
-  fetch('/api/news',{cache:'no-store'}).then(r=>r.ok?r.json():Promise.reject()).catch(()=>NEWS).then(showNews);
+  fetch('/api/news',{cache:'no-store'}).then(r=>r.ok?r.json():Promise.reject()).catch(()=>NEWS).then(d=>showNews(d,'updated' in d));
 });
+// red dot on the bell if there is something this browser hasnt opened yet
+fetch('/api/news',{cache:'no-store'}).then(r=>r.ok?r.json():Promise.reject()).then(d=>{
+  let seen=null;
+  try{seen=localStorage.getItem(SEEN_KEY)}catch{}
+  if(seen!==String(d.updated||0))document.getElementById('newdot').hidden=false;
+}).catch(()=>{});
 
 /* ---------- owner panel (#/owner) ----------
    only mods can open it for now, once the owner account exists it will be owner only */
@@ -740,6 +758,7 @@ function showOwner(){
   o.append(el('h2',{text:'Owner panel'}));
   meP.then(me=>{
     if(!me.loggedIn||!me.isMod){o.append(el('p',{text:'You do not have access to this page.'}));return}
+    let hasImage=false,version=0;
     const title=el('input',{type:'text',maxlength:'40','aria-label':'Box title'});
     const intro=el('input',{type:'text',maxlength:'80','aria-label':'Line under the title'});
     const items=el('textarea',{rows:'8','aria-label':'Announcements, one per line'});
@@ -748,17 +767,52 @@ function showOwner(){
     const preview=el('button',{class:'btn',type:'button',text:'Preview'});
     const say=(t,ok)=>{msg.className='msg '+(ok?'ok':'err');msg.textContent=t};
     const read=()=>({title:title.value,intro:intro.value,items:items.value.split('\n').map(x=>x.trim()).filter(Boolean).slice(0,12)});
+
+    // banner image
+    const pic=el('img',{class:'newsimg',alt:'Current banner image',hidden:''});
+    const file=el('input',{type:'file',accept:IMG_OK,'aria-label':'Banner image'});
+    const upload=el('button',{class:'btn',type:'button',text:'Upload image'});
+    const remove=el('button',{class:'btn',type:'button',text:'Remove image'});
+    const imsg=el('p',{class:'msg',role:'status'});
+    const isay=(t,ok)=>{imsg.className='msg '+(ok?'ok':'err');imsg.textContent=t};
+    function paintImage(){
+      pic.hidden=!hasImage;remove.hidden=!hasImage;
+      if(hasImage)pic.src='/api/news/image?v='+version;
+    }
+    async function sendImage(fd){
+      imsg.textContent='';upload.disabled=true;remove.disabled=true;
+      try{
+        const r=await fetch('/api/admin/news-image',{method:'POST',body:fd});
+        const j=await r.json().catch(()=>({}));
+        if(r.ok&&j.ok){hasImage=j.image;version=j.updated;file.value='';paintImage();isay(j.image?'Image saved.':'Image removed.',true)}
+        else isay(j.error||'That did not work.');
+      }catch{isay('Network problem. Try again.')}
+      upload.disabled=false;remove.disabled=false;
+    }
+    upload.addEventListener('click',()=>{
+      const f=file.files[0];
+      if(!f)return isay('Choose an image first.');
+      if(f.size>1024*1024)return isay('That image is too big (max 1 MB).');
+      const fd=new FormData();fd.append('file',f);sendImage(fd);
+    });
+    remove.addEventListener('click',()=>{const fd=new FormData();fd.append('remove','1');sendImage(fd)});
+
     o.append(
       el('h3',{text:'Announcements'}),
-      el('p',{class:'hint',text:'This is the box that opens from the bell button at the top left. Changes show up for everyone right away.'}),
+      el('p',{class:'hint',text:'This is the box that opens from the bell button at the top left. Changes show up for everyone right away, and the bell gets a red dot for people who have not seen the new version.'}),
       el('label',{text:'Title'}),title,
       el('label',{text:'Line under the title (optional)'}),intro,
       el('label',{text:'Announcements (one per line, up to 12)'}),items,
-      el('div',{class:'dl'},save,preview),msg);
+      el('div',{class:'dl'},save,preview),msg,
+      el('h3',{text:'Banner image'}),
+      el('p',{class:'hint',text:'Shows at the top of the box. PNG, JPG or WebP, up to 1 MB. Wide images (about 2 to 1) look best.'}),
+      pic,file,
+      el('div',{class:'dl'},upload,remove),imsg);
     fetch('/api/news',{cache:'no-store'}).then(r=>r.json()).then(d=>{
       title.value=d.title||'';intro.value=d.intro||'';items.value=(d.items||[]).join('\n');
+      hasImage=!!d.image;version=d.updated||0;paintImage();
     }).catch(()=>say('Could not load the current text.'));
-    preview.addEventListener('click',()=>{const d=read();if(!d.title.trim()){say('Add a title first.');return}showNews(d)});
+    preview.addEventListener('click',()=>{const d=read();if(!d.title.trim()){say('Add a title first.');return}showNews({...d,image:hasImage,updated:version},false)});
     save.addEventListener('click',async()=>{
       msg.textContent='';
       const d=read();
@@ -767,7 +821,7 @@ function showOwner(){
       try{
         const r=await fetch('/api/admin/news',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(d)});
         const j=await r.json().catch(()=>({}));
-        if(r.ok&&j.ok){title.value=j.title;intro.value=j.intro;items.value=j.items.join('\n');say('Saved.',true)}
+        if(r.ok&&j.ok){title.value=j.title;intro.value=j.intro;items.value=j.items.join('\n');version=j.updated;say('Saved.',true)}
         else say(j.error||'That did not work.');
       }catch{say('Network problem. Try again.')}
       save.disabled=false;
