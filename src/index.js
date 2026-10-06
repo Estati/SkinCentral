@@ -148,7 +148,7 @@ async function readSession(env, request) {
     let u;
     try {
       u = await env.DB.prepare(
-        "SELECT username, role, banned, display_name, has_avatar, avatar_v FROM users WHERE id = ?"
+        "SELECT username, role, banned, display_name, has_avatar, avatar_v, pw_at FROM users WHERE id = ?"
       ).bind(data.id).first();
     } catch {
       // profile columns not added to the database yet
@@ -157,6 +157,8 @@ async function readSession(env, request) {
       ).bind(data.id).first();
     }
     if (!u || u.banned) return null;
+    // password was changed or reset after this cookie was made -> logged out
+    if ((data.iat || 0) < (u.pw_at || 0)) return null;
     data.name = u.username;
     data.displayName = u.display_name || null;
     data.hasAvatar = !!u.has_avatar;
@@ -169,10 +171,10 @@ async function readSession(env, request) {
   }
 }
 
-function logout(env) {
-  const headers = new Headers({ Location: env.SITE_URL + "/" });
-  headers.append("Set-Cookie", cookie("session", "", 0));
-  return new Response(null, { status: 302, headers });
+function logout() {
+  const res = json({ ok: true });
+  res.headers.append("Set-Cookie", cookie("session", "", 0));
+  return res;
 }
 
 async function me(request, env) {
@@ -267,6 +269,7 @@ async function startSession(env, u) {
     avatar: null,
     mod,
     role: u.role,
+    iat: Math.floor(Date.now() / 1000),
     exp: Math.floor(Date.now() / 1000) + maxAge,
   });
   const res = json({ ok: true });
@@ -299,6 +302,10 @@ async function signup(request, env) {
   }
   if (!(await checkHuman(request, env))) {
     return json({ error: "The human check failed. Please try again." }, 400);
+  }
+
+  if (await isBreached(password)) {
+    return json({ error: "That password showed up in a known data leak. Please pick a different one." }, 400);
   }
 
   const taken = await env.DB.prepare("SELECT id FROM users WHERE username_lc = ?").bind(lc).first();
@@ -360,6 +367,144 @@ async function loginPassword(request, env) {
   // right password clears that usernames counter (the connection counter stays)
   await env.DB.prepare("DELETE FROM login_attempts WHERE key = ?").bind(userKey).run().catch(() => {});
   return startSession(env, u);
+}
+
+/* ---------- password tools: breach check, change your own, admin reset ---------- */
+// asks haveibeenpwned if a password is in a known leak. only the first 5 characters of a
+// scrambled copy leave the worker, never the password. if the service is down we just allow it
+async function isBreached(password) {
+  try {
+    const buf = await crypto.subtle.digest("SHA-1", enc.encode(password));
+    const hex = [...new Uint8Array(buf)].map((b) => b.toString(16).padStart(2, "0")).join("").toUpperCase();
+    const res = await fetch("https://api.pwnedpasswords.com/range/" + hex.slice(0, 5), {
+      headers: { "Add-Padding": "true" },
+      signal: AbortSignal.timeout(2500),
+    });
+    if (!res.ok) return false;
+    const rest = hex.slice(5);
+    for (const line of (await res.text()).split("\n")) {
+      const [suffix, count] = line.trim().split(":");
+      if (suffix === rest && Number(count) > 0) return true;
+    }
+  } catch {}
+  return false;
+}
+
+// makes a fresh salt + hash string ready to store in users.pass_hash
+async function newPassHash(env, password) {
+  const salt = crypto.getRandomValues(new Uint8Array(16));
+  const hash = await hashPassword(env, password, salt, PBKDF2_ROUNDS);
+  return `pbkdf2-sha256$${PBKDF2_ROUNDS}$${toB64url(salt)}$${hash}`;
+}
+
+// POST /api/password {current, next}  -> changes your own password, logs your other devices out
+async function changePassword(request, env) {
+  const s = await readSession(env, request);
+  if (!s) return json({ error: "Please log in first." }, 401);
+  if (!sameOrigin(request, env)) return json({ error: "Bad origin." }, 403);
+  const body = await readJson(request);
+  if (!body) return json({ error: "That did not look right. Try again." }, 400);
+  const current = String(body.current || "").slice(0, 200);
+  const next = String(body.next || "");
+
+  // 5 wrong current passwords, then wait 15 minutes
+  const now = Math.floor(Date.now() / 1000);
+  const key = "pwchange:" + s.id;
+  if ((await countAttempts(env, key, now - 900)) >= 5) {
+    return json({ error: "Too many wrong tries. Wait 15 minutes and try again." }, 429);
+  }
+  if (next.length < 10) return json({ error: "Your new password needs at least 10 characters." }, 400);
+  if (next.length > 128) return json({ error: "That password is too long (128 max)." }, 400);
+  if (next.toLowerCase() === s.name.toLowerCase()) return json({ error: "Your password can not be your username." }, 400);
+
+  const row = await env.DB.prepare("SELECT pass_hash FROM users WHERE id = ?").bind(s.id).first();
+  if (!row || !(await checkPassword(env, current, row.pass_hash))) {
+    await addAttempt(env, key, now);
+    return json({ error: "Your current password is wrong." }, 401);
+  }
+  if (next === current) return json({ error: "Your new password is the same as the old one." }, 400);
+  if (await isBreached(next)) {
+    return json({ error: "That password showed up in a known data leak. Please pick a different one." }, 400);
+  }
+
+  await env.DB.prepare("UPDATE users SET pass_hash = ?, pw_at = ? WHERE id = ?")
+    .bind(await newPassHash(env, next), now, s.id).run();
+  // fresh cookie for this device, every older cookie stops working
+  return startSession(env, { id: s.id, username: s.name, role: s.role });
+}
+
+// random temporary password like "k7mq-x3np-r9wd-h4tc" (no lookalike letters)
+function tempPassword() {
+  const chars = "abcdefghjkmnpqrstuvwxyz23456789"; // 31 characters
+  let out = "";
+  while (out.length < 16) {
+    for (const b of crypto.getRandomValues(new Uint8Array(32))) {
+      if (b < 248 && out.length < 16) out += chars[b % 31]; // skip 248+ so no letter is more likely
+    }
+  }
+  return out.match(/.{4}/g).join("-");
+}
+
+// POST /api/admin/user-reset {id}  -> new temporary password, shown once to the admin
+// same rules as the other account tools: not yourself, not the owner, only the owner can reset an admin
+async function resetPassword(request, env) {
+  const s = await readSession(env, request);
+  if (!isAdmin(s)) return json({ error: "Admins only." }, 403);
+  if (!sameOrigin(request, env)) return json({ error: "Bad origin." }, 403);
+  const body = await readJson(request);
+  if (!body) return json({ error: "Bad request." }, 400);
+  const t = await targetUser(env, s, body.id);
+  if (t.err) return t.err;
+  const temp = tempPassword();
+  const now = Math.floor(Date.now() / 1000);
+  await env.DB.prepare("UPDATE users SET pass_hash = ?, pw_at = ? WHERE id = ?")
+    .bind(await newPassHash(env, temp), now, t.u.id).run();
+  // clear their login lock so they can try the new password right away
+  await env.DB.prepare("DELETE FROM login_attempts WHERE key = ?").bind("login:user:" + t.u.username.toLowerCase()).run().catch(() => {});
+  await logAction(env, s, "reset a password", t.u.username, "");
+  return json({ ok: true, username: t.u.username, password: temp });
+}
+
+/* ---------- splash texts (the tilted yellow text under the logo) ---------- */
+const SPLASH_MAX = 30;   // characters per splash
+const SPLASH_COUNT = 60; // how many splashes
+
+// anyone can read them. custom:false means none saved, the page uses its built-in list
+async function getSplashes(env) {
+  try {
+    const row = await env.DB.prepare("SELECT value FROM settings WHERE key = 'splashes'").first();
+    if (row) {
+      const v = JSON.parse(row.value);
+      if (Array.isArray(v) && v.length) return json({ splashes: v.map(String), custom: true });
+    }
+  } catch {}
+  return json({ splashes: [], custom: false });
+}
+
+// POST /api/admin/splashes {splashes: [..]}  (an empty list goes back to the built-in ones)
+async function saveSplashes(request, env) {
+  const s = await readSession(env, request);
+  if (!isAdmin(s)) return json({ error: "Admins only." }, 403);
+  if (!sameOrigin(request, env)) return json({ error: "Bad origin." }, 403);
+  const body = await readJson(request);
+  if (!body || !Array.isArray(body.splashes)) return json({ error: "Bad request." }, 400);
+  const list = [];
+  for (const x of body.splashes) {
+    const t = clean(x, SPLASH_MAX);
+    if (t && !list.includes(t)) list.push(t);
+  }
+  if (list.length > SPLASH_COUNT) return json({ error: `Keep it to ${SPLASH_COUNT} splashes at most.` }, 400);
+  if (!list.length) {
+    await env.DB.prepare("DELETE FROM settings WHERE key = 'splashes'").run();
+    await logAction(env, s, "reset splash texts", "splashes", "back to built-in");
+    return json({ ok: true, count: 0 });
+  }
+  await env.DB.prepare(
+    `INSERT INTO settings (key, value, updated_at, updated_by) VALUES ('splashes', ?, ?, ?)
+     ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at, updated_by = excluded.updated_by`
+  ).bind(JSON.stringify(list), Math.floor(Date.now() / 1000), s.id).run();
+  await logAction(env, s, "edited splash texts", "splashes", list.length + " saved");
+  return json({ ok: true, count: list.length });
 }
 
 /* ---------- one time owner setup (/admin/setup) ----------
@@ -1192,7 +1337,6 @@ async function review(request, env) {
 /* ---------- reports ---------- */
 async function report(request, env, ctx) {
   const s = await readSession(env, request);
-  if (!s) return json({ error: "Please log in to send a report." }, 401);
   if (!sameOrigin(request, env)) return json({ error: "Bad origin." }, 403);
   let body;
   try {
@@ -1208,11 +1352,25 @@ async function report(request, env, ctx) {
   }
 
   const now = Math.floor(Date.now() / 1000);
-  const recent = await env.DB.prepare(
-    "SELECT COUNT(*) AS n FROM reports WHERE reporter_id = ? AND created_at > ?"
-  ).bind(s.id, now - 86400).first();
-  if (recent.n >= 5) {
-    return json({ error: "You have sent several reports today. Please try again tomorrow." }, 429);
+  let reporterId = "anon", reporterName = "Anonymous visitor", anonKey = null;
+  if (s) {
+    reporterId = s.id;
+    reporterName = clean(s.name, 60);
+    const recent = await env.DB.prepare(
+      "SELECT COUNT(*) AS n FROM reports WHERE reporter_id = ? AND created_at > ?"
+    ).bind(s.id, now - 86400).first();
+    if (recent.n >= 5) {
+      return json({ error: "You have sent several reports today. Please try again tomorrow." }, 429);
+    }
+  } else {
+    // not logged in: human check + 5 per connection per day
+    anonKey = "report:" + (await visitorTag(request, env));
+    if ((await countAttempts(env, anonKey, now - 86400)) >= 5) {
+      return json({ error: "You have sent several reports today. Please try again tomorrow." }, 429);
+    }
+    if (!(await checkHuman(request, env))) {
+      return json({ error: "The human check failed. Please try again." }, 400);
+    }
   }
 
   const pack = await env.DB.prepare("SELECT id, name FROM packs WHERE slug = ?").bind(slug).first();
@@ -1220,7 +1378,8 @@ async function report(request, env, ctx) {
   await env.DB.prepare(
     `INSERT INTO reports (pack_slug, pack_id, pack_name, reporter_id, reporter_name, reason, created_at)
      VALUES (?, ?, ?, ?, ?, ?, ?)`
-  ).bind(slug, pack ? pack.id : null, packName, s.id, clean(s.name, 60), reason, now).run();
+  ).bind(slug, pack ? pack.id : null, packName, reporterId, reporterName, reason, now).run();
+  if (anonKey) await addAttempt(env, anonKey, now);
 
   if (env.MOD_WEBHOOK_URL) {
     ctx.waitUntil(
@@ -1235,7 +1394,7 @@ async function report(request, env, ctx) {
             description: reason,
             url: env.SITE_URL + "/#/admin",
             color: 0xaa0000,
-            fields: [{ name: "Reported by", value: clean(s.name, 60) || "unknown" }],
+            fields: [{ name: "Reported by", value: reporterName || "unknown" }],
           }],
         }),
       }).catch(() => {})
@@ -1299,34 +1458,6 @@ async function adminAll(request, env) {
       fileInfo: JSON.parse(r.files || "[]"),
     }))
   );
-}
-
-async function editPack(request, env) {
-  const s = await readSession(env, request);
-  if (!s || !s.mod) return json({ error: "Moderators only." }, 403);
-  if (!sameOrigin(request, env)) return json({ error: "Bad origin." }, 403);
-  let body;
-  try {
-    body = await request.json();
-  } catch {
-    return json({ error: "Bad request." }, 400);
-  }
-  const id = String(body.id || "");
-  if (!/^[a-f0-9]{12}$/.test(id)) return json({ error: "Bad pack id." }, 400);
-  const name = clean(body.name, 40);
-  const description = clean(body.description, 500);
-  if (name.length < 3) return json({ error: "Pack name must be at least 3 characters." }, 400);
-  const tags = [];
-  for (const t of clean(body.tags, 200).split(",")) {
-    const tag = clean(t, 20);
-    if (tag && !tags.some((x) => x.toLowerCase() === tag.toLowerCase())) tags.push(tag);
-  }
-  tags.length = Math.min(tags.length, 5);
-  const r = await env.DB.prepare(
-    "UPDATE packs SET name = ?, description = ?, tags = ? WHERE id = ?"
-  ).bind(name, description, JSON.stringify(tags), id).run();
-  if (!r.meta.changes) return json({ error: "Pack not found." }, 404);
-  return json({ ok: true });
 }
 
 /* ---------- file downloads (from R2) ---------- */
@@ -1714,12 +1845,36 @@ async function saveNewsImage(request, env) {
 }
 
 /* ---------- router ---------- */
+/* ---------- cleanup: denied packs ----------
+   denied packs nobody touched for 30 days lose their R2 files (the row and the deny reason stay).
+   runs by itself now and then, no cron needed. if the creator edits it later they add files again */
+async function purgeDenied(env) {
+  try {
+    const cutoff = Math.floor(Date.now() / 1000) - 30 * 86400;
+    const { results } = await env.DB.prepare(
+      "SELECT id FROM packs WHERE status = 'denied' AND reviewed_at < ? AND files IS NOT NULL AND files != '[]' LIMIT 5"
+    ).bind(cutoff).all();
+    for (const r of results || []) {
+      let cursor;
+      do {
+        const page = await env.FILES.list({ prefix: r.id + "/", cursor });
+        if (page.objects.length) await env.FILES.delete(page.objects.map((o) => o.key));
+        cursor = page.truncated ? page.cursor : undefined;
+      } while (cursor);
+      await env.DB.prepare("UPDATE packs SET files = '[]', images = '[]' WHERE id = ?").bind(r.id).run();
+    }
+  } catch {}
+}
+
 async function route(request, env, ctx) {
   const url = new URL(request.url);
   const p = url.pathname;
   const m = request.method;
 
-  if (p === "/auth/logout") return logout(env);
+  if (p === "/auth/logout" && m === "POST") {
+    if (!sameOrigin(request, env)) return json({ error: "Bad origin." }, 403);
+    return logout();
+  }
   if (p === "/api/me") return me(request, env);
   if (p === "/api/signup" && m === "POST") return signup(request, env);
   if (p === "/api/login" && m === "POST") return loginPassword(request, env);
@@ -1729,9 +1884,16 @@ async function route(request, env, ctx) {
   if (p === "/api/admin/pack-owner" && m === "POST") return setPackOwner(request, env);
   if (p === "/api/admin/log" && m === "GET") return adminLog(request, env);
   if (p === "/api/admin/stats" && m === "GET") return adminStats(request, env);
+  if (p === "/api/admin/user-reset" && m === "POST") return resetPassword(request, env);
+  if (p === "/api/admin/splashes" && m === "POST") return saveSplashes(request, env);
+  if (p === "/api/splashes" && m === "GET") return getSplashes(env);
+  if (p === "/api/password" && m === "POST") return changePassword(request, env);
   if (p === "/admin/setup" && m === "GET") return setupShow(env);
   if (p === "/admin/setup" && m === "POST") return setupSubmit(request, env);
-  if (p === "/api/packs" && m === "GET") return listPacks(env);
+  if (p === "/api/packs" && m === "GET") {
+    if (Math.random() < 0.02) ctx.waitUntil(purgeDenied(env));
+    return listPacks(env);
+  }
   if (p === "/api/my" && m === "GET") return myPacks(request, env);
   if (p === "/api/social" && m === "GET") return packSocial(request, env, url);
   if (p === "/api/news" && m === "GET") return getNews(env);
@@ -1750,7 +1912,6 @@ async function route(request, env, ctx) {
   if (p === "/api/admin/reports" && m === "GET") return adminReports(request, env);
   if (p === "/api/admin/report-close" && m === "POST") return closeReport(request, env);
     if (p === "/api/admin/all" && m === "GET") return adminAll(request, env);
-  if (p === "/api/admin/edit" && m === "POST") return editPack(request, env);
   if (p === "/api/user" && m === "GET") return publicProfile(env, url);
   if (p === "/api/profile" && m === "POST") return saveProfile(request, env);
   if (p.startsWith("/files/avatar/") && m === "GET") return serveAvatar(env, url);
