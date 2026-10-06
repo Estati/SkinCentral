@@ -79,7 +79,11 @@ input[type=search]:focus{outline:3px solid var(--gold)}
 #detail h3{font-size:var(--b);margin:20px 0 12px}
 .dl{display:flex;flex-wrap:wrap;gap:12px}
 .shots{display:grid;grid-template-columns:repeat(auto-fill,minmax(200px,1fr));gap:12px}
-.shots img{width:100%;image-rendering:pixelated;border:3px solid #000}
+.shots img{width:100%;image-rendering:pixelated;border:3px solid #000;cursor:pointer}
+.shots img:focus-visible{outline:3px solid #ff0}
+.lightbox{position:fixed;inset:0;background:rgba(0,0,0,.9);display:flex;flex-direction:column;align-items:center;justify-content:center;gap:12px;padding:var(--pad);z-index:20}
+.lightbox img{width:100%;flex:1;min-height:0;object-fit:contain;image-rendering:pixelated}
+.lightbox .dl{margin:0;justify-content:center}
 label{display:block;margin:16px 0 8px}
 input[type=text],input[type=password],textarea{width:100%;font:inherit;font-size:var(--b);color:#fff;background:#000;padding:8px 12px;border:3px solid #6d6d6d}
 textarea{min-height:96px;resize:vertical}
@@ -418,6 +422,34 @@ function renderList(filter){
   if(!list.length){grid.appendChild(el('p',{class:'empty',text:'No packs match that search. Try a different word.'}));return}
   list.forEach(p=>grid.appendChild(packCard(p)));
 }
+/* click a screenshot to see it big. arrows / left+right keys flip through them, esc or a click outside closes */
+function showShots(list,start,alt){
+  let i=start;
+  const esc=e=>{
+    if(e.key==='Escape')close();
+    else if(e.key==='ArrowLeft')go(-1);
+    else if(e.key==='ArrowRight')go(1);
+  };
+  const close=()=>{ov.remove();document.removeEventListener('keydown',esc)};
+  const img=el('img',{alt});
+  const count=el('span',{class:'hint'});
+  const prev=el('button',{class:'btn',type:'button',text:'<','aria-label':'Previous screenshot'});
+  const next=el('button',{class:'btn',type:'button',text:'>','aria-label':'Next screenshot'});
+  const x=el('button',{class:'btn',type:'button',text:'Close'});
+  function go(d){i=(i+d+list.length)%list.length;img.src=list[i];count.textContent=(i+1)+' / '+list.length}
+  prev.addEventListener('click',()=>go(-1));
+  next.addEventListener('click',()=>go(1));
+  x.addEventListener('click',close);
+  const row=list.length>1?el('div',{class:'dl'},prev,count,next,x):el('div',{class:'dl'},x);
+  const ov=el('div',{class:'lightbox',role:'dialog','aria-modal':'true','aria-label':'Screenshot'},img,row);
+  // clicking the dark area (not the picture or buttons) closes it
+  ov.addEventListener('click',e=>{if(e.target===ov)close()});
+  document.addEventListener('keydown',esc);
+  document.body.append(ov);
+  go(0);   // shows the one we started on
+  x.focus();
+}
+
 function showPack(p){
   const d=$('detail');d.textContent='';document.title=p.name+' | Skin Central';
   const dl=el('div',{class:'dl'});
@@ -432,7 +464,12 @@ function showPack(p){
     el('p',{class:'desc',text:p.description}),el('h3',{text:'Download'}),dl);
   if(p.images&&p.images.length){
     const g=el('div',{class:'shots'});
-    p.images.forEach(src=>g.appendChild(el('img',{src,alt:p.name+' preview',loading:'lazy'})));
+    p.images.forEach((src,n)=>{
+      const im=el('img',{src,alt:p.name+' preview (click to enlarge)',loading:'lazy',tabindex:'0',role:'button'});
+      im.addEventListener('click',()=>showShots(p.images,n,p.name+' preview'));
+      im.addEventListener('keydown',e=>{if(e.key==='Enter'||e.key===' '){e.preventDefault();showShots(p.images,n,p.name+' preview')}});
+      g.appendChild(im);
+    });
     d.append(el('h3',{text:'Screenshots'}),g);
   }
   // likes + comments only for packs in the database (packs.json ones dont have an id/counts)
