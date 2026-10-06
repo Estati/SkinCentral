@@ -1059,6 +1059,58 @@ async function deleteComment(request, env) {
   return json({ ok: true });
 }
 
+/* ---------- announcements (the bell box) ---------- */
+// what shows if nobody edited it yet (or the settings table isnt there)
+const DEFAULT_NEWS = {
+  title: "Welcome back!",
+  intro: "Here's what's new:",
+  items: [
+    "Packs now have likes, comments and download counts.",
+    "You can edit or delete your own packs from your account.",
+    "Moderators can edit and delete any pack.",
+    "You can upload without logging in.",
+    "The new Tools page has PCK Studio and the tutorials.",
+  ],
+};
+
+// anyone can read the announcements
+async function getNews(env) {
+  try {
+    const row = await env.DB.prepare("SELECT value FROM settings WHERE key = 'news'").first();
+    if (row) {
+      const v = JSON.parse(row.value);
+      if (v && Array.isArray(v.items)) return json(v);
+    }
+  } catch {}
+  return json(DEFAULT_NEWS);
+}
+
+// save the announcements (mods for now, owner only once the owner account exists)
+async function saveNews(request, env) {
+  const s = await readSession(env, request);
+  if (!s || !s.mod) return json({ error: "Moderators only." }, 403);
+  if (!sameOrigin(request, env)) return json({ error: "Bad origin." }, 403);
+  let body;
+  try {
+    body = await request.json();
+  } catch {
+    return json({ error: "Bad request." }, 400);
+  }
+  const title = clean(body.title, 40);
+  const intro = clean(body.intro, 80);
+  if (!title) return json({ error: "The title cant be empty." }, 400);
+  const items = (Array.isArray(body.items) ? body.items : [])
+    .map((t) => clean(t, 120))
+    .filter(Boolean)
+    .slice(0, 12);
+  const value = JSON.stringify({ title, intro, items });
+  await env.DB.prepare(
+    `INSERT INTO settings (key, value, updated_at, updated_by) VALUES ('news', ?, ?, ?)
+     ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at, updated_by = excluded.updated_by`
+  ).bind(value, Math.floor(Date.now() / 1000), s.id).run();
+  return json({ ok: true, title, intro, items });
+}
+
 /* ---------- router ---------- */
 async function route(request, env, ctx) {
   const url = new URL(request.url);
@@ -1072,6 +1124,8 @@ async function route(request, env, ctx) {
   if (p === "/api/packs" && m === "GET") return listPacks(env);
   if (p === "/api/my" && m === "GET") return myPacks(request, env);
   if (p === "/api/social" && m === "GET") return packSocial(request, env, url);
+  if (p === "/api/news" && m === "GET") return getNews(env);
+  if (p === "/api/admin/news" && m === "POST") return saveNews(request, env);
   if (p === "/api/like" && m === "POST") return setLike(request, env);
   if (p === "/api/comment" && m === "POST") return addComment(request, env);
   if (p === "/api/comment/delete" && m === "POST") return deleteComment(request, env);
