@@ -10,6 +10,10 @@ const LIMITS = {
   anonTotal: 10 * 1024 * 1024, // anon upload whole thing max
   anonPerDay: 2,           // anon uploads per visitor per day
   anonMaxPending: 10,      // anon packs waiting for review site wide
+  avatar: 256 * 1024,      // profile picture max size
+  nameMax: 24,             // display name length
+  bioMax: 200,             // bio length
+  profileEditsPerHour: 20, // profile saves per person per hour
 };
 const PLATFORMS = {
   xbox360: "Xbox 360",
@@ -141,11 +145,22 @@ async function readSession(env, request) {
     // only site accounts (ids like u1a2b3c4d5e6f) count now. old discord cookies (digit ids) stop working
     if (!/^u[0-9a-f]{12}$/.test(String(data.id))) return null;
     // look the user up every time so a ban or a role change works right away
-    const u = await env.DB.prepare(
-      "SELECT username, role, banned FROM users WHERE id = ?"
-    ).bind(data.id).first();
+    let u;
+    try {
+      u = await env.DB.prepare(
+        "SELECT username, role, banned, display_name, has_avatar, avatar_v FROM users WHERE id = ?"
+      ).bind(data.id).first();
+    } catch {
+      // profile columns not added to the database yet
+      u = await env.DB.prepare(
+        "SELECT username, role, banned FROM users WHERE id = ?"
+      ).bind(data.id).first();
+    }
     if (!u || u.banned) return null;
     data.name = u.username;
+    data.displayName = u.display_name || null;
+    data.hasAvatar = !!u.has_avatar;
+    data.avatarV = u.avatar_v || 0;
     data.role = u.role;
     data.mod = u.role === "mod" || u.role === "admin" || u.role === "owner";
     return data;
@@ -164,7 +179,7 @@ async function me(request, env) {
   const s = await readSession(env, request);
   return json(
     s
-      ? { loggedIn: true, user: { id: s.id, name: s.name }, isMod: s.mod, role: s.role || (s.mod ? "mod" : "user") }
+      ? { loggedIn: true, user: { id: s.id, name: s.name, displayName: s.displayName || null, hasAvatar: !!s.hasAvatar, avatarV: s.avatarV || 0 }, isMod: s.mod, role: s.role || (s.mod ? "mod" : "user") }
       : { loggedIn: false }
   );
 }
@@ -643,6 +658,11 @@ function packView(r) {
     name: r.name,
     creator: r.creator_name,
     creatorId: r.creator_id && r.creator_id !== "anon" ? r.creator_id : null,
+    // site accounts get a profile link and picture (creator_name is their username)
+    creatorUsername: /^u[0-9a-f]{12}$/.test(String(r.creator_id || "")) ? r.creator_name : null,
+    creatorAvatar: /^u[0-9a-f]{12}$/.test(String(r.creator_id || "")) && r.creator_has_avatar
+      ? `/files/avatar/${String(r.creator_name).toLowerCase()}?v=${r.creator_avatar_v || 0}`
+      : null,
     date: new Date(r.created_at * 1000).toISOString().slice(0, 10),
     tags: JSON.parse(r.tags || "[]"),
     description: r.description,
@@ -662,14 +682,24 @@ async function listPacks(env) {
   let results;
   try {
     ({ results } = await env.DB.prepare(
-      `SELECT p.*, (SELECT COUNT(*) FROM likes l WHERE l.pack_id = p.id) AS like_count
-       FROM packs p WHERE p.status = 'approved' ORDER BY p.created_at DESC LIMIT 500`
+      `SELECT p.*, (SELECT COUNT(*) FROM likes l WHERE l.pack_id = p.id) AS like_count,
+              u.has_avatar AS creator_has_avatar, u.avatar_v AS creator_avatar_v
+       FROM packs p LEFT JOIN users u ON u.id = p.creator_id
+       WHERE p.status = 'approved' ORDER BY p.created_at DESC LIMIT 500`
     ).all());
   } catch {
-    // likes table missing, just skip the counts
-    ({ results } = await env.DB.prepare(
-      "SELECT * FROM packs WHERE status = 'approved' ORDER BY created_at DESC LIMIT 500"
-    ).all());
+    // profile columns missing, go without pictures
+    try {
+      ({ results } = await env.DB.prepare(
+        `SELECT p.*, (SELECT COUNT(*) FROM likes l WHERE l.pack_id = p.id) AS like_count
+         FROM packs p WHERE p.status = 'approved' ORDER BY p.created_at DESC LIMIT 500`
+      ).all());
+    } catch {
+      // likes table missing, just skip the counts
+      ({ results } = await env.DB.prepare(
+        "SELECT * FROM packs WHERE status = 'approved' ORDER BY created_at DESC LIMIT 500"
+      ).all());
+    }
   }
   return json(results.map(packView));
 }
@@ -1360,6 +1390,113 @@ async function serveFile(request, env, url, ctx) {
   return new Response(obj.body, { headers });
 }
 
+/* ---------- profiles (display name, bio, picture) ---------- */
+// GET /api/user?name=<username> -> public profile info
+async function publicProfile(env, url) {
+  const lc = String(url.searchParams.get("name") || "").toLowerCase();
+  if (!/^[a-z0-9_]{3,20}$/.test(lc)) return json({ error: "No one has that name." }, 404);
+  let u;
+  try {
+    u = await env.DB.prepare(
+      "SELECT username, display_name, bio, has_avatar, avatar_v, role, banned, created_at FROM users WHERE username_lc = ?"
+    ).bind(lc).first();
+  } catch {
+    u = await env.DB.prepare(
+      "SELECT username, role, banned, created_at FROM users WHERE username_lc = ?"
+    ).bind(lc).first();
+  }
+  if (!u || u.banned) return json({ error: "No one has that name." }, 404);
+  return json({
+    username: u.username,
+    displayName: u.display_name || null,
+    bio: u.bio || "",
+    hasAvatar: !!u.has_avatar,
+    avatarV: u.avatar_v || 0,
+    role: u.role,
+    joined: new Date(u.created_at * 1000).toISOString().slice(0, 10),
+  });
+}
+
+// GET /files/avatar/<username> -> the profile picture (?v=N is only there so browsers refresh it)
+async function serveAvatar(env, url) {
+  const parts = url.pathname.split("/");
+  const lc = parts[3] || "";
+  if (parts.length !== 4 || !/^[a-z0-9_]{3,20}$/.test(lc)) return notFound();
+  const obj = await env.FILES.get("avatars/" + lc);
+  if (!obj) return notFound();
+  const t = obj.httpMetadata && obj.httpMetadata.contentType;
+  return new Response(obj.body, {
+    headers: {
+      "Content-Type": ["image/png", "image/jpeg", "image/webp"].includes(t) ? t : "application/octet-stream",
+      "X-Content-Type-Options": "nosniff",
+      "Content-Security-Policy": "default-src 'none'; sandbox",
+      "Cache-Control": url.searchParams.has("v") ? "public, max-age=31536000, immutable" : "public, max-age=300",
+    },
+  });
+}
+
+// POST /api/profile (multipart: displayName, bio, avatar file, removeAvatar=1)
+async function saveProfile(request, env) {
+  const s = await readSession(env, request);
+  if (!s) return json({ error: "Please log in first." }, 401);
+  if (!sameOrigin(request, env)) return json({ error: "Bad origin." }, 403);
+  const len = Number(request.headers.get("Content-Length") || 0);
+  if (len > LIMITS.avatar + 64 * 1024) return json({ error: "That upload is too big." }, 413);
+
+  const now = Math.floor(Date.now() / 1000);
+  if ((await countAttempts(env, "profile:" + s.id, now - 3600)) >= LIMITS.profileEditsPerHour) {
+    return json({ error: "You changed your profile too many times. Try again later." }, 429);
+  }
+
+  let form;
+  try { form = await request.formData(); } catch { return json({ error: "Bad request." }, 400); }
+  const nameIn = form.get("displayName");
+  const bioIn = form.get("bio");
+  const displayName = typeof nameIn === "string" ? clean(nameIn, LIMITS.nameMax) : "";
+  const bio = typeof bioIn === "string" ? clean(bioIn, LIMITS.bioMax) : "";
+
+  if (displayName) {
+    if (!/[\p{L}\p{N}]/u.test(displayName)) {
+      return json({ error: "Your display name needs at least one letter or number." }, 400);
+    }
+    // letters and numbers only, so "Skin_Central" and "skin central" count as the same name
+    const flat = displayName.toLowerCase().replace(/[^a-z0-9]/g, "");
+    if (flat && RESERVED_NAMES.has(flat) && s.role !== "owner") {
+      return json({ error: "You cannot use that display name." }, 400);
+    }
+    // nobody can look like somebody else's username
+    if (flat && flat !== s.name.toLowerCase().replace(/[^a-z0-9]/g, "")) {
+      const clash = await env.DB.prepare(
+        "SELECT id FROM users WHERE REPLACE(username_lc, '_', '') = ? AND id != ?"
+      ).bind(flat, s.id).first();
+      if (clash) return json({ error: "That name belongs to another account." }, 400);
+    }
+  }
+
+  const lc = s.name.toLowerCase();
+  const file = form.get("avatar");
+  let change = null; // "set" or "removed"
+  if (isFile(file)) {
+    if (file.size > LIMITS.avatar) {
+      return json({ error: `Profile pictures can be ${niceSize(LIMITS.avatar)} at most.` }, 400);
+    }
+    const type = await sniffImage(file);
+    if (!type) return json({ error: "Profile pictures must be PNG, JPG or WebP." }, 400);
+    await env.FILES.put("avatars/" + lc, await file.arrayBuffer(), { httpMetadata: { contentType: type } });
+    change = "set";
+  } else if (form.get("removeAvatar") === "1") {
+    await env.FILES.delete("avatars/" + lc);
+    change = "removed";
+  }
+
+  let sql = "UPDATE users SET display_name = ?, bio = ?";
+  if (change === "set") sql += ", has_avatar = 1, avatar_v = avatar_v + 1";
+  if (change === "removed") sql += ", has_avatar = 0, avatar_v = avatar_v + 1";
+  await env.DB.prepare(sql + " WHERE id = ?").bind(displayName || null, bio || null, s.id).run();
+  await addAttempt(env, "profile:" + s.id, now);
+  return json({ ok: true });
+}
+
 /* ---------- likes + comments ---------- */
 // only approved packs can get likes and comments
 async function approvedPack(env, id) {
@@ -1614,6 +1751,9 @@ async function route(request, env, ctx) {
   if (p === "/api/admin/report-close" && m === "POST") return closeReport(request, env);
     if (p === "/api/admin/all" && m === "GET") return adminAll(request, env);
   if (p === "/api/admin/edit" && m === "POST") return editPack(request, env);
+  if (p === "/api/user" && m === "GET") return publicProfile(env, url);
+  if (p === "/api/profile" && m === "POST") return saveProfile(request, env);
+  if (p.startsWith("/files/avatar/") && m === "GET") return serveAvatar(env, url);
   if (p.startsWith("/files/") && m === "GET") return serveFile(request, env, url, ctx);
 
   if (
