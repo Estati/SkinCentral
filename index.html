@@ -365,22 +365,34 @@ function reportBox(p){
   const why=el('textarea',{maxlength:'300',placeholder:'What is wrong? (stolen or ripped content, NSFW content, unsafe file, something else)','aria-label':'Why are you reporting this pack?'});
   const send=el('button',{class:'btn',type:'button',text:'Send report'});
   const msg=el('p',{class:'msg',role:'status'});
-  form.append(el('p',{class:'hint',text:'Reports go to the moderators. You need to be logged in.'}),why,send,msg);
+  const tsBox=el('div');
+  let human=null,loggedIn=false;
+  form.append(el('p',{class:'hint',text:'Reports go to the moderators. If you are not logged in you do a quick human check first.'}),why,tsBox,send,msg);
   box.append(toggle,form);
-  toggle.addEventListener('click',()=>{form.hidden=!form.hidden});
+  toggle.addEventListener('click',()=>{
+    form.hidden=!form.hidden;
+    // the human check only loads for logged out people, and only once
+    if(!form.hidden&&!human)meP.then(me=>{loggedIn=!!me.loggedIn;if(!loggedIn&&!human)human=mountTurnstile(tsBox)});
+  });
   send.addEventListener('click',async()=>{
     msg.className='msg';msg.textContent='';
     const me=await meP;
-    if(!me.loggedIn){msg.className='msg err';msg.textContent='Log in first (button at the top of the page).';return}
     const reason=why.value.trim();
     if(reason.length<5){msg.className='msg err';msg.textContent='Please say what is wrong (at least 5 characters).';return}
+    const headers={'Content-Type':'application/json'};
+    if(!me.loggedIn){
+      const t=human?human.token():'';
+      if(!t){msg.className='msg err';msg.textContent='Please finish the human check first.';return}
+      headers['X-Turnstile-Token']=t;
+    }
     send.disabled=true;
     try{
-      const r=await fetch('/api/report',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({slug:p.slug,name:p.name,reason})});
+      const r=await fetch('/api/report',{method:'POST',headers,body:JSON.stringify({slug:p.slug,name:p.name,reason})});
       const d=await r.json().catch(()=>({}));
       if(r.ok&&d.ok){msg.className='msg ok';msg.textContent=d.message;why.value=''}
       else{msg.className='msg err';msg.textContent=d.error||'Could not send the report.'}
     }catch{msg.className='msg err';msg.textContent='Network problem. Try again.'}
+    if(human)human.reset();   // token only works once
     send.disabled=false;
   });
   return box;
@@ -701,7 +713,7 @@ function showAdmin(){
 const RULES=[
   ['Only upload your own work','Skins and packs must be made by you, or by someone who gave you permission. Give credit to the creators.'],
   ['No ripped or leaked official content','No official DLC, paid packs, or files taken from Mojang, Microsoft or other companies.'],
-  ['No NSFW content','No nudity, sexual or fetish content, or graphic gore in skins, icons, screenshots, names or descriptions. This includes anything suggestive, because lots of members are young.'],
+  ['No NSFW content','No nudity, sexual or fetish content, or graphic gore in skins, icons, screenshots, names or descriptions. This includes anything suggestive, because lots of members are young. The same goes for profile names, bios and pictures.'],
   ['No harmful files','Packs only. Programs, scripts and web pages are blocked, and moderators may open any file to check it.'],
   ['Keep it friendly','No hateful or harassing content, and nothing made to mock or target real people.'],
   ['No spam or re-uploads',"Don't upload the same pack twice, and never upload someone else's pack as your own."],
@@ -713,9 +725,20 @@ function showRules(){
   r.append(el('h2',{text:'Rules'}),
     el('p',{class:'callout',text:'Every pack is checked by a moderator before it appears.'}));
   RULES.forEach((x,i)=>r.append(el('h3',{text:(i+1)+'. '+x[0]}),el('p',{text:x[1]})));
+  r.append(el('h2',{text:'Accounts and uploads'}),
+    el('h3',{text:'Accounts'}),
+    el('p',{text:'Sign up with a username and a password, no email needed. Use a password you do not use anywhere else and never share it. If you forget it, ask an admin in the Discord for a temporary one, then change it on My account.'}),
+    el('h3',{text:'Anonymous uploads'}),
+    el('p',{text:'You can upload without an account. Anonymous packs are checked like every other pack, but only moderators can edit or delete them afterwards, so ask in the Discord if something needs to change. Make an account if you want to manage your own packs.'}),
+    el('h3',{text:'Editing a pack after it was approved'}),
+    el('p',{text:'Changing the name, description or tags keeps your pack live. Changing the icon, screenshots or pack files takes it off the site until a moderator approves it again. Editing a denied pack also sends it back for review.'}),
+    el('h3',{text:'Denied packs'}),
+    el('p',{text:'A denied pack stays in \"My packs\" with the reason. If nobody edits it for 30 days its files are deleted, and you would need to add them again to send it back for review.'}),
+    el('h3',{text:'Profiles'}),
+    el('p',{text:'Your profile (display name, bio and picture) is public. Moderators can ban accounts that break the rules.'}));
   r.append(el('h2',{text:'Reports and takedowns'}),
     el('h3',{text:'To report a pack'}),
-    el('p',{text:'Open the pack, press "Report this pack", log in and tell us what is wrong. You can send up to 5 reports a day.'}),
+    el('p',{text:'Open the pack, press "Report this pack" and tell us what is wrong. You do not need an account, but if you are logged out you do a quick human check first. You can send up to 5 reports a day.'}),
     el('h3',{text:'What happens next'}),
     el('p',{text:'Moderators look at the report, then either take the pack down or close the report.'}),
     el('h3',{text:'Creators'}),
@@ -798,13 +821,14 @@ function showOwner(){
     if(me.role==='owner'){heading.textContent='Owner panel';document.title='Owner panel | Skin Central'}
 
     // sub menus: one section shows at a time. accounts, log and site reload each time you open them
-    const tabNames=[['accounts','Accounts'],['move','Pack owners'],['news','Announcements'],['log','Mod log'],['site','Site']];
+    const tabNames=[['accounts','Accounts'],['move','Pack owners'],['news','Announcements'],['log','Mod log'],['splash','Splashes'],['site','Site']];
     const tabbar=el('div',{class:'tabs',role:'group','aria-label':'Panel sections'});
     const secs={},tabBtns={};
     const loaders={
       accounts:()=>{secs.accounts.textContent='';ownerUsers(secs.accounts,me)},
       move:()=>{secs.move.textContent='';ownerMove(secs.move)},
       log:()=>{secs.log.textContent='';ownerLog(secs.log)},
+      splash:()=>{secs.splash.textContent='';ownerSplash(secs.splash)},
       site:()=>{secs.site.textContent='';ownerStats(secs.site)}
     };
     function openTab(k){
@@ -916,6 +940,41 @@ function ownerUsers(o,me){
     return b;
   }
 
+  // shows the temporary password once. it is not stored anywhere readable after this
+  function showTemp(name,pw){
+    const esc=e=>{if(e.key==='Escape')close()};
+    const close=()=>{ov.remove();document.removeEventListener('keydown',esc)};
+    const box=el('input',{type:'text',readonly:'',value:pw,'aria-label':'Temporary password'});
+    const copy=el('button',{class:'btn',type:'button',text:'Copy'});
+    const done=el('button',{class:'btn',type:'button',text:'Done'});
+    copy.addEventListener('click',()=>{
+      box.select();
+      (navigator.clipboard?navigator.clipboard.writeText(pw):Promise.reject()).then(()=>{copy.textContent='Copied!'}).catch(()=>{copy.textContent='Press Ctrl+C'});
+    });
+    done.addEventListener('click',close);
+    const ov=el('div',{class:'modal'},
+      el('div',{class:'panel',role:'dialog','aria-modal':'true'},
+        el('h2',{text:'New password for '+name}),
+        el('p',{text:'Send this to them privately (like a Discord DM). It only shows once. They should change it on My account after logging in.'}),
+        box,el('div',{class:'dl'},copy,done)));
+    document.addEventListener('keydown',esc);
+    document.body.append(ov);
+    box.focus();box.select();
+  }
+
+  function resetBtn(u){
+    const b=el('button',{class:'btn',type:'button',text:'Reset password'});
+    b.addEventListener('click',()=>askConfirm('Reset password for '+u.username+'?','They get a new temporary password and are logged out everywhere. You will see it once.','Yes, reset it',async()=>{
+      try{
+        const r=await fetch('/api/admin/user-reset',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({id:u.id})});
+        const j=await r.json().catch(()=>({}));
+        if(!r.ok||!j.ok)throw new Error(j.error||'That did not work.');
+        msg.textContent='';showTemp(j.username,j.password);
+      }catch(e){say(e.message)}
+    }));
+    return b;
+  }
+
   function row(u){
     const label=u.role==='owner'?'Owner':u.role==='admin'?'Admin':u.role==='mod'?'Moderator':'User';
     const joined=new Date(u.created*1000).toISOString().slice(0,10);
@@ -924,6 +983,7 @@ function ownerUsers(o,me){
     // nobody can touch the owner, and only the owner can touch admins
     const locked=u.role==='owner'||(u.role==='admin'&&me.role!=='owner');
     if(!locked){
+      add(btns,resetBtn(u));
       if(u.banned){
         add(btns,mk('Unban','Unban '+u.username+'?','They will be able to log in again as a normal user.','Yes, unban',B,{id:u.id,banned:false}));
       }else{
@@ -957,7 +1017,7 @@ function ownerUsers(o,me){
   q.addEventListener('keydown',e=>{if(e.key==='Enter')load()});
   o.append(
     el('h3',{text:'Accounts'}),
-    el('p',{class:'hint',text:'Everyone who signed up on the site. Moderators can review, edit and delete packs. Admins can do almost everything the owner can, except change the owner or other admins. Banned accounts are logged out right away.'}),
+    el('p',{class:'hint',text:'Everyone who signed up on the site. Moderators can review, edit and delete packs. Admins can do almost everything the owner can, except change the owner or other admins. Banned accounts are logged out right away. Reset password gives someone who forgot theirs a temporary one.'}),
     q,el('div',{class:'dl'},go),msg,list);
   load();
 }
@@ -1016,6 +1076,52 @@ function ownerMove(o){
     el('p',{class:'hint',text:'Pick any single pack, including anonymous ones. Shows the newest 200 packs, use the search to find one.'}),
     q,packList);
   loadPacks();
+}
+
+/* ---------- owner panel: splash texts (the tilted text under the logo) ---------- */
+function ownerSplash(o){
+  const MAX=30,COUNT=60;
+  const box=el('textarea',{rows:'12','aria-label':'Splash texts, one per line'});
+  const info=el('p',{class:'hint'});
+  const msg=el('p',{class:'msg',role:'status'});
+  const say=(t,ok)=>{msg.className='msg '+(ok?'ok':'err');msg.textContent=t};
+  const save=el('button',{class:'btn',type:'button',text:'Save'});
+  const peek=el('button',{class:'btn',type:'button',text:'Try one'});
+  const back=el('button',{class:'btn',type:'button',text:'Back to built-in'});
+  const lines=()=>box.value.split('\n').map(x=>x.trim()).filter(Boolean);
+  const count=()=>{
+    const l=lines(),long=l.filter(x=>x.length>MAX).length;
+    info.textContent=l.length+' of '+COUNT+' splashes'+(long?' - '+long+' too long (max '+MAX+' characters, shorter fits phones better)':'');
+  };
+  box.addEventListener('input',count);
+  peek.addEventListener('click',()=>{
+    const l=lines();if(!l.length)return;
+    document.querySelector('.splash').textContent=l[Math.floor(Math.random()*l.length)];
+  });
+  async function send(list){
+    const r=await fetch('/api/admin/splashes',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({splashes:list})});
+    const j=await r.json().catch(()=>({}));
+    if(!r.ok||!j.ok)throw new Error(j.error||'That did not work.');
+  }
+  save.addEventListener('click',async()=>{
+    const l=lines();
+    if(!l.length)return say('Add at least one, or use Back to built-in.');
+    if(l.some(x=>x.length>MAX))return say('Some are longer than '+MAX+' characters.');
+    if(l.length>COUNT)return say('Keep it to '+COUNT+' splashes at most.');
+    save.disabled=true;
+    try{await send(l);say('Saved. The new list shows when the page reloads.',true)}catch(e){say(e.message)}
+    save.disabled=false;
+  });
+  back.addEventListener('click',()=>askConfirm('Go back to the built-in splashes?','Your custom list is deleted and the original ones come back.','Yes, go back',async()=>{
+    try{await send([]);box.value=splashes.join('\n');count();say('Back to the built-in list.',true)}catch(e){say(e.message)}
+  }));
+  o.append(
+    el('h3',{text:'Splash texts'}),
+    el('p',{class:'hint',text:'One per line. A random one shows under the logo each time the page loads. Keep them short (about 25 characters) so they fit on phones.'}),
+    box,info,el('div',{class:'dl'},save,peek,back),msg);
+  fetch('/api/splashes',{cache:'no-store'}).then(r=>r.json()).then(d=>{
+    box.value=(d.custom&&d.splashes.length?d.splashes:splashes).join('\n');count();
+  }).catch(()=>{box.value=splashes.join('\n');count()});
 }
 
 /* ---------- owner panel: mod log ---------- */
@@ -1180,6 +1286,43 @@ function showEdit(p,card,opts){
   add(card,emsg,el('div',{class:'dl'},save,cancel));
 }
 
+/* ---------- change your own password (shows on the account page) ---------- */
+function passwordBox(){
+  const box=el('div',{class:'reportbox'});
+  const toggle=el('button',{class:'btn',type:'button',text:'Change password'});
+  const form=el('div',{hidden:''});
+  const cur=el('input',{type:'password',maxlength:'128',autocomplete:'current-password','aria-label':'Current password'});
+  const n1=el('input',{type:'password',maxlength:'128',autocomplete:'new-password','aria-label':'New password'});
+  const n2=el('input',{type:'password',maxlength:'128',autocomplete:'new-password','aria-label':'Repeat new password'});
+  const save=el('button',{class:'btn',type:'button',text:'Save new password'});
+  const msg=el('p',{class:'msg',role:'status'});
+  const say=(t,ok)=>{msg.className='msg '+(ok?'ok':'err');msg.textContent=t};
+  form.append(
+    el('p',{class:'hint',text:'At least 10 characters. Your other devices get logged out.'}),
+    el('label',{text:'Current password'}),cur,
+    el('label',{text:'New password'}),n1,
+    el('label',{text:'Repeat new password'}),n2,
+    el('div',{class:'dl'},save),msg);
+  box.append(toggle,form);
+  toggle.addEventListener('click',()=>{form.hidden=!form.hidden;msg.textContent=''});
+  async function go(){
+    msg.className='msg';msg.textContent='';
+    if(!cur.value||!n1.value)return say('Fill in all three boxes.');
+    if(n1.value!==n2.value)return say('The two new passwords do not match.');
+    save.disabled=true;msg.textContent='One moment...';
+    try{
+      const r=await fetch('/api/password',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({current:cur.value,next:n1.value})});
+      const d=await r.json().catch(()=>({}));
+      if(r.ok&&d.ok){cur.value=n1.value=n2.value='';say('Password changed.',true)}
+      else say(d.error||'That did not work.');
+    }catch{say('Network problem. Try again.')}
+    save.disabled=false;
+  }
+  save.addEventListener('click',go);
+  [cur,n1,n2].forEach(i=>i.addEventListener('keydown',e=>{if(e.key==='Enter')go()}));
+  return box;
+}
+
 /* ---------- account page (#/account) ----------
    my packs, their status, edit and delete buttons */
 function showAccount(){
@@ -1197,6 +1340,7 @@ function showAccount(){
     a.append(
       el('p',{class:'hint',text:'Logged in as '+me.user.name+(me.role==='owner'?' (owner)':me.role==='admin'?' (admin)':me.isMod?' (moderator)':'')+'.'}),
       el('div',{class:'dl'},el('a',{class:'btn',href:'#/user/'+encodeURIComponent(me.user.name),text:'My profile'}),el('a',{class:'btn',href:'#/upload',text:'Upload a pack'})),
+      passwordBox(),
       el('h3',{text:'My packs'}),msg,list);
 
     async function remove(p){
@@ -1411,7 +1555,7 @@ function showAuth(mode){
   const ov=el('div',{class:'modal'},
     el('div',{class:'panel',role:'dialog','aria-modal':'true','aria-labelledby':'auth-title'},
       el('h2',{id:'auth-title',text:signup?'Create an account':'Log in'}),
-      signup?el('p',{class:'hint',text:'Pick a username (3 to 20 letters, numbers or underscores) and a password with at least 10 characters. No email needed. If you forget your password, ask the owner or a moderator on our Discord. Use a password you do not use anywhere else.'}):null,
+      signup?el('p',{class:'hint',text:'Pick a username (3 to 20 letters, numbers or underscores) and a password with at least 10 characters. No email needed. If you forget your password, ask an admin on our Discord for a temporary one. Use a password you do not use anywhere else.'}):null,
       el('label',{text:'Username'}),user,
       el('label',{text:'Password'}),pass,
       signup?el('label',{text:'Repeat password'}):null,pass2,
@@ -1444,10 +1588,17 @@ meP.then(me=>{
     im.addEventListener('error',()=>im.replaceWith(initial()));
     pic=im;
   }
+  // logout is a POST so other sites cant trigger it with a link
+  const outBtn=el('button',{class:'btn',type:'button',text:'Log out'});
+  outBtn.addEventListener('click',async()=>{
+    outBtn.disabled=true;
+    try{await fetch('/auth/logout',{method:'POST'})}catch{}
+    location.href='/';location.reload();
+  });
   bar.append(
     el('a',{class:'acct',href:'#/account',title:'My account'},pic,
       el('span',{class:'who'},el('span',{text:me.user.name}),el('small',{text:me.role==='owner'?'Owner':me.role==='admin'?'Admin':me.isMod?'Moderator':'My account'}))),
-    el('a',{class:'btn',href:'/auth/logout',text:'Log out'}));
+    outBtn);
   if(me.isMod){
     document.querySelector('.row').append(el('a',{class:'btn',href:'#/admin',text:'Moderation'}));
   }
@@ -1471,7 +1622,12 @@ const splashes=[
   'Skins for everyone!',
   'Join the Discord!'
 ];
-document.querySelector('.splash').textContent=splashes[Math.floor(Math.random()*splashes.length)];
+// the owner can save their own list in the database, if there is none we use the one above
+const pickSplash=l=>l[Math.floor(Math.random()*l.length)];
+fetch('/api/splashes',{cache:'no-store'}).then(r=>r.ok?r.json():null).then(d=>{
+  const l=d&&Array.isArray(d.splashes)&&d.splashes.length?d.splashes:splashes;
+  document.querySelector('.splash').textContent=pickSplash(l);
+}).catch(()=>{document.querySelector('.splash').textContent=pickSplash(splashes)});
 </script>
 </body>
 </html>
