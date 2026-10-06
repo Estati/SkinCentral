@@ -138,91 +138,20 @@ async function readSession(env, request) {
     if (!ok) return null;
     const data = JSON.parse(new TextDecoder().decode(fromB64url(payload)));
     if (data.exp < Date.now() / 1000) return null;
-    // site accounts (ids like u1a2b3c4d5e6f): look them up every time so a ban or a role change
-    // works right away. discord ids are only digits and keep the old cookie based check for now
-    if (/^u[0-9a-f]{12}$/.test(String(data.id))) {
-      const u = await env.DB.prepare(
-        "SELECT username, role, banned FROM users WHERE id = ?"
-      ).bind(data.id).first();
-      if (!u || u.banned) return null;
-      data.name = u.username;
-      data.role = u.role;
-      data.mod = u.role === "mod" || u.role === "admin" || u.role === "owner";
-    }
+    // only site accounts (ids like u1a2b3c4d5e6f) count now. old discord cookies (digit ids) stop working
+    if (!/^u[0-9a-f]{12}$/.test(String(data.id))) return null;
+    // look the user up every time so a ban or a role change works right away
+    const u = await env.DB.prepare(
+      "SELECT username, role, banned FROM users WHERE id = ?"
+    ).bind(data.id).first();
+    if (!u || u.banned) return null;
+    data.name = u.username;
+    data.role = u.role;
+    data.mod = u.role === "mod" || u.role === "admin" || u.role === "owner";
     return data;
   } catch {
     return null;
   }
-}
-
-function login(env) {
-  const state = crypto.randomUUID();
-  const params = new URLSearchParams({
-    client_id: env.DISCORD_CLIENT_ID,
-    redirect_uri: env.SITE_URL + "/auth/callback",
-    response_type: "code",
-    scope: "identify guilds.members.read",
-    state,
-  });
-  const headers = new Headers({
-    Location: "https://discord.com/oauth2/authorize?" + params,
-  });
-  headers.append("Set-Cookie", cookie("oauth_state", state, 600));
-  return new Response(null, { status: 302, headers });
-}
-
-async function callback(request, env, url) {
-  const code = url.searchParams.get("code");
-  const state = url.searchParams.get("state");
-  if (!code || !state || state !== getCookie(request, "oauth_state")) {
-    return new Response("Login failed (bad state). Please try again.", { status: 400 });
-  }
-
-  const tokenRes = await fetch("https://discord.com/api/oauth2/token", {
-    method: "POST",
-    headers: { "Content-Type": "application/x-www-form-urlencoded" },
-    body: new URLSearchParams({
-      client_id: env.DISCORD_CLIENT_ID,
-      client_secret: env.DISCORD_CLIENT_SECRET,
-      grant_type: "authorization_code",
-      code,
-      redirect_uri: env.SITE_URL + "/auth/callback",
-    }),
-  });
-  if (!tokenRes.ok) return new Response("Discord login failed.", { status: 502 });
-  const { access_token } = await tokenRes.json();
-  const auth = { Authorization: "Bearer " + access_token };
-
-  const userRes = await fetch("https://discord.com/api/users/@me", { headers: auth });
-  if (!userRes.ok) return new Response("Could not read your Discord profile.", { status: 502 });
-  const user = await userRes.json();
-
-  let roles = [];
-  const memRes = await fetch(
-    `https://discord.com/api/users/@me/guilds/${env.GUILD_ID}/member`,
-    { headers: auth }
-  );
-  if (memRes.ok) {
-    const member = await memRes.json();
-    roles = member.roles || [];
-  }
-
-  const isMod = roles.includes(env.MOD_ROLE_ID);
-  // mods get a 1 day login so a removed role stops working fast
-  const maxAge = isMod ? 60 * 60 * 24 : 60 * 60 * 24 * 7;
-  const session = await signSession(env, {
-    id: user.id,
-    name: user.global_name || user.username,
-    avatar: user.avatar,
-    mod: isMod,
-    role: isMod ? "mod" : "user",
-    exp: Math.floor(Date.now() / 1000) + maxAge,
-  });
-
-  const headers = new Headers({ Location: env.SITE_URL + "/" });
-  headers.append("Set-Cookie", cookie("session", session, maxAge));
-  headers.append("Set-Cookie", cookie("oauth_state", "", 0));
-  return new Response(null, { status: 302, headers });
 }
 
 function logout(env) {
@@ -235,7 +164,7 @@ async function me(request, env) {
   const s = await readSession(env, request);
   return json(
     s
-      ? { loggedIn: true, user: { id: s.id, name: s.name, avatar: s.avatar }, isMod: s.mod, role: s.role || (s.mod ? "mod" : "user") }
+      ? { loggedIn: true, user: { id: s.id, name: s.name }, isMod: s.mod, role: s.role || (s.mod ? "mod" : "user") }
       : { loggedIn: false }
   );
 }
@@ -1105,7 +1034,7 @@ async function submit(request, env, ctx) {
     ).bind(visitor, now - 86400).first();
     if (today.n >= LIMITS.anonPerDay) {
       return json({
-        error: `Anonymous uploads are limited to ${LIMITS.anonPerDay} per day. Try again tomorrow, or log in with Discord.`,
+        error: `Anonymous uploads are limited to ${LIMITS.anonPerDay} per day. Try again tomorrow, or log in.`,
       }, 429);
     }
     const queue = await env.DB.prepare(
@@ -1113,7 +1042,7 @@ async function submit(request, env, ctx) {
     ).first();
     if (queue.n >= LIMITS.anonMaxPending) {
       return json({
-        error: "Too many anonymous packs are waiting for review right now. Please try again later, or log in with Discord.",
+        error: "Too many anonymous packs are waiting for review right now. Please try again later, or log in.",
       }, 429);
     }
   } else {
@@ -1292,7 +1221,7 @@ async function review(request, env) {
 /* ---------- reports ---------- */
 async function report(request, env, ctx) {
   const s = await readSession(env, request);
-  if (!s) return json({ error: "Please log in with Discord to send a report." }, 401);
+  if (!s) return json({ error: "Please log in to send a report." }, 401);
   if (!sameOrigin(request, env)) return json({ error: "Bad origin." }, 403);
   let body;
   try {
@@ -1530,7 +1459,7 @@ async function packSocial(request, env, url) {
 // reads the json body for the like/comment routes and checks login + origin
 async function socialInput(request, env) {
   const s = await readSession(env, request);
-  if (!s) return { err: json({ error: "Log in with Discord first." }, 401) };
+  if (!s) return { err: json({ error: "Log in first." }, 401) };
   if (!sameOrigin(request, env)) return { err: json({ error: "Bad origin." }, 403) };
   let body;
   try {
@@ -1712,8 +1641,6 @@ async function route(request, env, ctx) {
   const p = url.pathname;
   const m = request.method;
 
-  if (p === "/auth/login") return login(env);
-  if (p === "/auth/callback") return callback(request, env, url);
   if (p === "/auth/logout") return logout(env);
   if (p === "/api/me") return me(request, env);
   if (p === "/api/signup" && m === "POST") return signup(request, env);
