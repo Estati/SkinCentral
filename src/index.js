@@ -721,6 +721,35 @@ async function setUserBan(request, env) {
   return json({ ok: true, banned });
 }
 
+// POST /api/admin/user-delete {id, confirm: username}  (owner only)
+// the account, its likes, comments and profile picture are deleted for good.
+// their packs stay up but turn anonymous ("Deleted user") so nothing disappears from the gallery
+async function deleteAccount(request, env) {
+  const s = await readSession(env, request);
+  if (!s || s.role !== "owner") return json({ error: "Only the owner can delete accounts." }, 403);
+  if (!sameOrigin(request, env)) return json({ error: "Bad origin." }, 403);
+  const body = await readJson(request);
+  if (!body) return json({ error: "Bad request." }, 400);
+  const t = await targetUser(env, s, body.id);
+  if (t.err) return t.err;
+  // typing the username is the "are you really sure" step
+  if (String(body.confirm || "").trim().toLowerCase() !== t.u.username.toLowerCase()) {
+    return json({ error: "The username you typed does not match." }, 400);
+  }
+  const id = t.u.id;
+  // picture first, if this fails nothing else was touched yet
+  await env.FILES.delete("avatars/" + t.u.username.toLowerCase());
+  await env.DB.batch([
+    env.DB.prepare("DELETE FROM likes WHERE user_id = ?").bind(id),
+    env.DB.prepare("DELETE FROM comments WHERE user_id = ?").bind(id),
+    env.DB.prepare("UPDATE packs SET creator_id = 'anon', creator_name = 'Deleted user' WHERE creator_id = ?").bind(id),
+    env.DB.prepare("DELETE FROM login_attempts WHERE key IN (?, ?)").bind("login:user:" + t.u.username.toLowerCase(), "profile:" + id),
+    env.DB.prepare("DELETE FROM users WHERE id = ?").bind(id),
+  ]);
+  await logAction(env, s, "deleted an account", t.u.username, "was " + t.u.role);
+  return json({ ok: true });
+}
+
 // GET /api/admin/log  -> the last 100 owner/admin actions
 async function adminLog(request, env) {
   const s = await readSession(env, request);
@@ -1885,6 +1914,7 @@ async function route(request, env, ctx) {
   if (p === "/api/admin/log" && m === "GET") return adminLog(request, env);
   if (p === "/api/admin/stats" && m === "GET") return adminStats(request, env);
   if (p === "/api/admin/user-reset" && m === "POST") return resetPassword(request, env);
+  if (p === "/api/admin/user-delete" && m === "POST") return deleteAccount(request, env);
   if (p === "/api/admin/splashes" && m === "POST") return saveSplashes(request, env);
   if (p === "/api/splashes" && m === "GET") return getSplashes(env);
   if (p === "/api/password" && m === "POST") return changePassword(request, env);
