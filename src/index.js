@@ -147,7 +147,7 @@ async function readSession(env, request) {
       if (!u || u.banned) return null;
       data.name = u.username;
       data.role = u.role;
-      data.mod = u.role === "mod" || u.role === "owner";
+      data.mod = u.role === "mod" || u.role === "admin" || u.role === "owner";
     }
     return data;
   } catch {
@@ -315,7 +315,7 @@ async function addAttempt(env, key, now) {
 
 // makes the session cookie, same cookie the discord login uses
 async function startSession(env, u) {
-  const mod = u.role === "mod" || u.role === "owner";
+  const mod = u.role === "mod" || u.role === "admin" || u.role === "owner";
   const maxAge = mod ? 60 * 60 * 24 : 60 * 60 * 24 * 7;
   const token = await signSession(env, {
     id: u.id,
@@ -540,7 +540,12 @@ async function setupSubmit(request, env) {
   return new Response(null, { status: 303, headers });
 }
 
-/* ---------- owner tools: users, roles, bans ---------- */
+/* ---------- owner + admin tools: users, roles, bans ---------- */
+// admins have the same powers as the owner, except they cant touch the owner or other admins
+function isAdmin(s) {
+  return !!s && (s.role === "owner" || s.role === "admin");
+}
+
 // writes a line in the mod log table (shown in the owner panel later)
 async function logAction(env, s, action, target, detail) {
   await env.DB.prepare(
@@ -551,7 +556,7 @@ async function logAction(env, s, action, target, detail) {
 // GET /api/admin/users?q=name  -> up to 50 accounts, newest first
 async function adminUsers(request, env, url) {
   const s = await readSession(env, request);
-  if (!s || s.role !== "owner") return json({ error: "Owner only." }, 403);
+  if (!isAdmin(s)) return json({ error: "Admins only." }, 403);
   const q = clean(url.searchParams.get("q"), 20).toLowerCase();
   let res;
   if (q) {
@@ -585,30 +590,35 @@ async function targetUser(env, s, id) {
   if (!u) return { err: json({ error: "That account does not exist." }, 404) };
   if (u.id === s.id) return { err: json({ error: "You can not change your own account here." }, 400) };
   if (u.role === "owner") return { err: json({ error: "The owner account can not be changed." }, 400) };
+  if (u.role === "admin" && s.role !== "owner") {
+    return { err: json({ error: "Only the owner can change an admin." }, 403) };
+  }
   return { u };
 }
 
 // POST /api/admin/user-role  {id, role: "mod" or "user"}
 async function setUserRole(request, env) {
   const s = await readSession(env, request);
-  if (!s || s.role !== "owner") return json({ error: "Owner only." }, 403);
+  if (!isAdmin(s)) return json({ error: "Admins only." }, 403);
   if (!sameOrigin(request, env)) return json({ error: "Bad origin." }, 403);
   const body = await readJson(request);
   if (!body) return json({ error: "Bad request." }, 400);
-  const role = body.role === "mod" ? "mod" : body.role === "user" ? "user" : null;
-  if (!role) return json({ error: "Pick moderator or user." }, 400);
+  const role = ["user", "mod", "admin"].includes(body.role) ? body.role : null;
+  if (!role) return json({ error: "Pick user, moderator or admin." }, 400);
+  if (role === "admin" && s.role !== "owner") return json({ error: "Only the owner can make admins." }, 403);
   const t = await targetUser(env, s, body.id);
   if (t.err) return t.err;
-  if (t.u.banned && role === "mod") return json({ error: "Unban that account before making it a moderator." }, 400);
+  if (t.u.banned && role !== "user") return json({ error: "Unban that account first." }, 400);
   await env.DB.prepare("UPDATE users SET role = ? WHERE id = ?").bind(role, t.u.id).run();
-  await logAction(env, s, role === "mod" ? "promoted to moderator" : "demoted to user", t.u.username, "");
+  const what = { user: "set to user", mod: "set to moderator", admin: "set to admin" };
+  await logAction(env, s, what[role], t.u.username, "was " + t.u.role);
   return json({ ok: true, role });
 }
 
 // POST /api/admin/user-ban  {id, banned: true/false}
 async function setUserBan(request, env) {
   const s = await readSession(env, request);
-  if (!s || s.role !== "owner") return json({ error: "Owner only." }, 403);
+  if (!isAdmin(s)) return json({ error: "Admins only." }, 403);
   if (!sameOrigin(request, env)) return json({ error: "Bad origin." }, 403);
   const body = await readJson(request);
   if (!body) return json({ error: "Bad request." }, 400);
@@ -1515,7 +1525,7 @@ async function newsImage(env) {
 // save the announcement text (mods for now, owner only once the owner account exists)
 async function saveNews(request, env) {
   const s = await readSession(env, request);
-  if (!s || s.role !== "owner") return json({ error: "Owner only." }, 403);
+  if (!isAdmin(s)) return json({ error: "Admins only." }, 403);
   if (!sameOrigin(request, env)) return json({ error: "Bad origin." }, 403);
   let body;
   try {
@@ -1538,7 +1548,7 @@ async function saveNews(request, env) {
 // change or remove the banner image (multipart: "file", or remove=1)
 async function saveNewsImage(request, env) {
   const s = await readSession(env, request);
-  if (!s || s.role !== "owner") return json({ error: "Owner only." }, 403);
+  if (!isAdmin(s)) return json({ error: "Admins only." }, 403);
   if (!sameOrigin(request, env)) return json({ error: "Bad origin." }, 403);
   if (Number(request.headers.get("Content-Length") || 0) > NEWS_IMAGE_MAX + 64 * 1024) {
     return json({ error: "That image is too big (max 1 MB)." }, 413);
