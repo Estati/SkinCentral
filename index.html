@@ -143,6 +143,14 @@ input[type=checkbox]{width:16px;height:16px;margin:0 8px 0 0;vertical-align:midd
 .acct small{display:block;color:#555}
 .acct:hover small,.acct:focus-visible small{color:inherit}
 @media (min-width:700px){.acct img,.acct .ph{width:48px;height:48px}}
+/* profile pages + pictures */
+.avatar{display:block;flex:none;width:var(--icon-big);height:var(--icon-big);object-fit:cover;image-rendering:auto;background:#222;border:3px solid #000}
+.avatar.sm{width:96px;height:96px}
+.avatar.ph{display:flex;align-items:center;justify-content:center;color:#fff;font-size:var(--h);font-weight:700}
+.mini{width:24px;height:24px;object-fit:cover;image-rendering:auto;vertical-align:middle;margin-right:8px;background:#222;border:2px solid #000}
+#profile .head h2{text-align:left}
+#profile h3{font-size:var(--b);margin:24px 0 12px}
+.bio{max-width:60ch;margin:0 0 16px;overflow-wrap:anywhere}
 /* popups (anon warning, delete confirm) */
 .modal{position:fixed;inset:0;background:rgba(0,0,0,.7);display:flex;align-items:center;justify-content:center;padding:var(--pad);z-index:10}
 .modal .panel{max-width:560px;margin:0;max-height:90vh;overflow:auto}
@@ -191,6 +199,7 @@ footer{margin-top:8px;font-size:var(--t);color:#cfc8bf;text-shadow:2px 2px 0 #00
   <section class="panel doc" id="rules" hidden></section>
   <section class="panel doc" id="tutorials" hidden></section>
   <section class="panel doc" id="account" hidden></section>
+  <section class="panel" id="profile" hidden></section>
   <section class="panel doc" id="owner" hidden></section>
 
   <footer>Fan-made community site. Not affiliated with Mojang or Microsoft. <a href="#/rules">Rules</a></footer>
@@ -248,9 +257,14 @@ function el(tag,attrs,...kids){
 function add(parent,...kids){kids.forEach(k=>k&&parent.appendChild(k));return parent}
 // "1 download" / "5 downloads"
 function countText(n,word){return n+' '+word+(n===1?'':'s')}
-// creator name, plain text for now (links to profile pages come later)
+// creator name. site accounts link to their profile and show their picture (if they have one)
 function creatorLink(p){
-  return el('span',{text:p.creator});
+  if(!p.creatorUsername)return el('span',{text:p.creator});
+  const link=el('a',{class:'creator',href:'#/user/'+encodeURIComponent(p.creatorUsername),text:p.creator});
+  if(!p.creatorAvatar)return link;
+  const im=el('img',{class:'mini',src:p.creatorAvatar,alt:'',loading:'lazy'});
+  im.addEventListener('error',()=>im.remove());
+  return el('span',{},im,link);
 }
 function icon(p,cls){
   if(p.icon)return el('img',{src:p.icon,alt:'',class:'icon '+(cls||'')});
@@ -296,7 +310,7 @@ function socialBox(p){
         if(r.ok)load();else say(r.d.error||'That did not work.');
       }));
       list.appendChild(el('div',{class:'card admin'},
-        el('p',{class:'by'},creatorLink({creator:c.name,creatorId:c.userId}),el('span',{text:', '+c.date})),
+        el('p',{class:'by'},creatorLink({creator:c.name,creatorId:c.userId,creatorUsername:/^u[0-9a-f]{12}$/.test(c.userId||'')?c.name:null}),el('span',{text:', '+c.date})),
         el('p',{class:'desc',text:c.body}),
         del));
     });
@@ -372,23 +386,25 @@ function reportBox(p){
   return box;
 }
 let packs=[];
+// one pack card (gallery + profile pages)
+function packCard(p){
+  const href='#/pack/'+encodeURIComponent(p.slug);
+  const pic=el('div',{class:'iconlink'},icon(p));
+  const pl=el('div',{class:'plats'});
+  p.files.forEach(f=>{const i=pIcon(f.platform);if(i)pl.append(i)});
+  return el('div',{class:'card'},pic,
+    el('div',{class:'name',text:p.name}),
+    pl.children.length?pl:null,
+    el('small',{},el('span',{text:'by '}),creatorLink(p),el('span',{text:' for '+p.files.map(x=>x.platform).join(', ')})),
+    typeof p.downloads==='number'?el('small',{text:countText(p.likes||0,'like')+', '+countText(p.downloads,'download')}):null,
+    el('a',{href,class:'btn',text:'View pack'}));
+}
 function renderList(filter){
   const grid=$('grid');grid.textContent='';document.title='Skin Central: Legacy Console Edition';
   const f=(filter||'').toLowerCase().trim();
   const list=packs.filter(p=>(p.name+' '+p.tags.join(' ')+' '+p.files.map(x=>x.platform).join(' ')).toLowerCase().includes(f));
   if(!list.length){grid.appendChild(el('p',{class:'empty',text:'No packs match that search. Try a different word.'}));return}
-  list.forEach(p=>{
-    const href='#/pack/'+encodeURIComponent(p.slug);
-    const pic=el('div',{class:'iconlink'},icon(p));
-    const pl=el('div',{class:'plats'});
-    p.files.forEach(f=>{const i=pIcon(f.platform);if(i)pl.append(i)});
-    grid.appendChild(el('div',{class:'card'},pic,
-      el('div',{class:'name',text:p.name}),
-      pl.children.length?pl:null,
-      el('small',{},el('span',{text:'by '}),creatorLink(p),el('span',{text:' for '+p.files.map(x=>x.platform).join(', ')})),
-      typeof p.downloads==='number'?el('small',{text:countText(p.likes||0,'like')+', '+countText(p.downloads,'download')}):null,
-      el('a',{href,class:'btn',text:'View pack'})));
-  });
+  list.forEach(p=>grid.appendChild(packCard(p)));
 }
 function showPack(p){
   const d=$('detail');d.textContent='';document.title=p.name+' | Skin Central';
@@ -1180,7 +1196,7 @@ function showAccount(){
     const msg=el('p',{class:'msg',role:'status'});
     a.append(
       el('p',{class:'hint',text:'Logged in as '+me.user.name+(me.role==='owner'?' (owner)':me.role==='admin'?' (admin)':me.isMod?' (moderator)':'')+'.'}),
-      el('a',{class:'btn',href:'#/upload',text:'Upload a pack'}),
+      el('div',{class:'dl'},el('a',{class:'btn',href:'#/user/'+encodeURIComponent(me.user.name),text:'My profile'}),el('a',{class:'btn',href:'#/upload',text:'Upload a pack'})),
       el('h3',{text:'My packs'}),msg,list);
 
     async function remove(p){
@@ -1222,13 +1238,117 @@ function showAccount(){
   });
 }
 
+/* ---------- profile pages (#/user/<username>) ----------
+   picture, display name, bio, join date and that persons approved packs */
+const AVATAR_MAX=256*1024;  // same as LIMITS.avatar in src/index.js
+function bigAvatar(u,cls){
+  const letter=()=>el('div',{class:'avatar ph '+(cls||''),text:(u.displayName||u.username).charAt(0).toUpperCase()});
+  if(!u.hasAvatar)return letter();
+  const im=el('img',{class:'avatar '+(cls||''),src:'/files/avatar/'+u.username.toLowerCase()+'?v='+(u.avatarV||0),alt:''});
+  im.addEventListener('error',()=>im.replaceWith(letter()));
+  return im;
+}
+function showProfile(name){
+  const pr=$('profile');pr.textContent='';document.title=name+' | Skin Central';
+  pr.append(el('p',{class:'hint',text:'Loading...'}));
+  Promise.all([
+    fetch('/api/user?name='+encodeURIComponent(name),{cache:'no-store'}).then(async r=>({ok:r.ok,d:await r.json().catch(()=>({}))})).catch(()=>({ok:false,d:{error:'Network problem. Try again.'}})),
+    meP
+  ]).then(([r,me])=>{
+    pr.textContent='';
+    if(!r.ok){
+      pr.append(el('h2',{text:'Profile not found'}),el('p',{text:r.d.error||'No one has that name.'}),el('a',{class:'btn',href:'#skins',text:'Browse packs'}));
+      return;
+    }
+    const u=r.d;
+    document.title=(u.displayName||u.username)+' | Skin Central';
+    const mine=me.loggedIn&&me.user.name.toLowerCase()===u.username.toLowerCase();
+    const role=u.role==='owner'?'Owner':u.role==='admin'?'Admin':u.role==='mod'?'Moderator':'';
+    const edit=mine?el('button',{class:'btn',type:'button',text:'Edit profile'}):null;
+    if(edit)edit.addEventListener('click',()=>showEditProfile(u));
+    pr.append(
+      el('div',{class:'head'},bigAvatar(u),el('div',{},
+        el('h2',{text:u.displayName||u.username}),
+        u.displayName?el('p',{class:'by',text:'@'+u.username}):null,
+        role?el('p',{class:'by',text:role}):null,
+        el('p',{class:'by',text:'Joined '+u.joined}))),
+      u.bio?el('p',{class:'bio',text:u.bio}):null,
+      edit?el('div',{class:'dl'},edit):null);
+    const mineP=packs.filter(p=>p.creatorUsername&&p.creatorUsername.toLowerCase()===u.username.toLowerCase());
+    const grid=el('div',{class:'grid'});
+    if(!mineP.length)grid.append(el('p',{class:'empty',text:'No approved packs yet.'}));
+    mineP.forEach(p=>grid.append(packCard(p)));
+    pr.append(el('h3',{text:'Packs by '+(u.displayName||u.username)+' ('+mineP.length+')'}),grid);
+  });
+}
+/* edit profile popup, saves to /api/profile then reloads so the new picture shows everywhere */
+function showEditProfile(u){
+  const esc=e=>{if(e.key==='Escape')close()};
+  const close=()=>{ov.remove();document.removeEventListener('keydown',esc)};
+  const name=el('input',{type:'text',maxlength:'24',placeholder:u.username,'aria-label':'Display name',autocomplete:'off'});
+  name.value=u.displayName||'';
+  const bio=el('textarea',{maxlength:'200','aria-label':'Bio'});
+  bio.value=u.bio||'';
+  const count=el('p',{class:'hint'});
+  const paint=()=>{count.textContent=bio.value.length+' / 200'};
+  bio.addEventListener('input',paint);paint();
+  const pv=el('div',{},bigAvatar(u,'sm'));
+  const file=el('input',{type:'file',accept:IMG_OK,'aria-label':'Profile picture'});
+  const rm=el('input',{type:'checkbox',id:'pf-rm'});
+  const msg=el('p',{class:'msg',role:'status'});
+  const save=el('button',{class:'btn',type:'button',text:'Save'});
+  const no=el('button',{class:'btn',type:'button',text:'Cancel'});
+  const err=t=>{msg.className='msg err';msg.textContent=t};
+  file.addEventListener('change',()=>{
+    msg.textContent='';
+    const f=file.files[0];
+    if(!f)return;
+    if(!['image/png','image/jpeg','image/webp'].includes(f.type)){err('Pictures must be PNG, JPG or WebP.');file.value='';return}
+    if(f.size>AVATAR_MAX){err('That picture is too big. Max '+kb(AVATAR_MAX)+'.');file.value='';return}
+    pv.textContent='';pv.append(el('img',{class:'avatar sm',src:URL.createObjectURL(f),alt:''}));
+    rm.checked=false;
+  });
+  save.addEventListener('click',async()=>{
+    msg.className='msg';msg.textContent='';
+    const f=file.files[0];
+    const fd=new FormData();
+    fd.append('displayName',name.value.trim());
+    fd.append('bio',bio.value.trim());
+    if(f)fd.append('avatar',f);else if(rm.checked)fd.append('removeAvatar','1');
+    save.disabled=true;
+    try{
+      const r=await fetch('/api/profile',{method:'POST',body:fd});
+      const d=await r.json().catch(()=>({}));
+      if(r.ok&&d.ok){close();location.reload();return}
+      err(d.error||'That did not work.');
+    }catch{err('Network problem. Try again.')}
+    save.disabled=false;
+  });
+  no.addEventListener('click',close);
+  const ov=el('div',{class:'modal'},
+    el('div',{class:'panel',role:'dialog','aria-modal':'true','aria-labelledby':'pf-title'},
+      el('h2',{id:'pf-title',text:'Edit profile'}),
+      el('label',{text:'Display name (optional)'}),name,
+      el('p',{class:'hint',text:'Your username stays @'+u.username+'. Packs you upload still show your username.'}),
+      el('label',{text:'Bio'}),bio,count,
+      el('label',{text:'Profile picture (PNG, JPG or WebP, '+kb(AVATAR_MAX)+' max)'}),pv,file,
+      u.hasAvatar?el('label',{class:'chk',for:'pf-rm'},rm,el('span',{text:'Remove my picture'})):null,
+      msg,
+      el('div',{class:'dl'},save,no)));
+  ov.addEventListener('click',e=>{if(e.target===ov)close()});
+  document.addEventListener('keydown',esc);
+  document.body.append(ov);
+  name.focus();
+}
+
 function route(){
   const h=location.hash;
   const m=h.match(/^#\/pack\/(.+)$/);
   const p=m&&packs.find(x=>x.slug===decodeURIComponent(m[1]));
+  const us=h.match(/^#\/user\/([A-Za-z0-9_]{3,20})$/);
   const up=h==='#/upload',ad=h==='#/admin',ru=h==='#/rules',tu=h==='#/tutorials',ac=h==='#/account',ow=h==='#/owner';
-  $('skins').hidden=!!p||up||ad||ru||tu||ac||ow;$('detail').hidden=!p;$('upload').hidden=!up;$('admin').hidden=!ad;$('rules').hidden=!ru;$('tutorials').hidden=!tu;$('account').hidden=!ac;$('owner').hidden=!ow;
-  ad?showAdmin():up?showUpload():ru?showRules():tu?showTutorials():ac?showAccount():ow?showOwner():p?showPack(p):renderList($('q').value);
+  $('skins').hidden=!!p||up||ad||ru||tu||ac||ow||!!us;$('profile').hidden=!us;$('detail').hidden=!p;$('upload').hidden=!up;$('admin').hidden=!ad;$('rules').hidden=!ru;$('tutorials').hidden=!tu;$('account').hidden=!ac;$('owner').hidden=!ow;
+  ad?showAdmin():up?showUpload():ru?showRules():tu?showTutorials():ac?showAccount():ow?showOwner():us?showProfile(us[1]):p?showPack(p):renderList($('q').value);
   window.scrollTo(0,0);
 }
 $('q').addEventListener('input',e=>renderList(e.target.value));
@@ -1316,9 +1436,14 @@ meP.then(me=>{
     bar.append(el('div',{class:'authbtns'},li,su));
     return;
   }
-  // account card, later this can show a custom pic + display name + bio
+  // account card with my profile picture (or my first letter)
   const initial=()=>el('span',{class:'ph',text:(me.user.name||'?').charAt(0).toUpperCase()});
-  const pic=initial();
+  let pic=initial();
+  if(me.user.hasAvatar){
+    const im=el('img',{src:'/files/avatar/'+me.user.name.toLowerCase()+'?v='+(me.user.avatarV||0),alt:''});
+    im.addEventListener('error',()=>im.replaceWith(initial()));
+    pic=im;
+  }
   bar.append(
     el('a',{class:'acct',href:'#/account',title:'My account'},pic,
       el('span',{class:'who'},el('span',{text:me.user.name}),el('small',{text:me.role==='owner'?'Owner':me.role==='admin'?'Admin':me.isMod?'Moderator':'My account'}))),
