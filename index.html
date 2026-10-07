@@ -115,8 +115,7 @@ input[type=checkbox]{accent-color:var(--gold)}
 .carousel .nav{position:absolute;top:50%;transform:translateY(-50%);padding:8px 14px}
 .carousel .nav.l{left:8px}
 .carousel .nav.r{right:8px}
-.carousel-anims{display:flex;gap:8px;justify-content:center;flex-wrap:wrap;margin-top:8px}
-.carousel-anims .btn.on{outline:3px solid var(--gold);outline-offset:-3px}
+.carousel-anims{margin:8px 0 0}
 .carousel-name{text-align:center;margin-top:8px}
 .carousel-name .cn{font-size:var(--b)}
 .carousel-name .ct2{font-size:var(--t)}
@@ -784,11 +783,11 @@ function startCarousel(box,p,skins){
   const nm=el('div',{class:'cn'}),th=el('div',{class:'ct2'}),cnt=el('div',{class:'hint'});
   const nameBox=el('div',{class:'panel carousel-name'},nm,th,cnt);
   // one button per preview pose
-  const bar=el('div',{class:'carousel-anims'});
+  const bar=el('div',{class:'tabs carousel-anims',role:'group','aria-label':'Preview animation'});
   const abtn={};
   for(const [k,label] of [['idle','Idle'],['crouch','Crouch'],['hit','Hit'],['run','Run']]){
-    const b=el('button',{class:'btn'+(k==='idle'?' on':''),type:'button',text:label});
-    b.addEventListener('click',()=>{mode=k;for(const q in abtn)abtn[q].classList.toggle('on',q===k)});
+    const b=el('button',{class:'btn',type:'button',text:label,'aria-pressed':k==='idle'?'true':'false'});
+    b.addEventListener('click',()=>{mode=k;for(const q in abtn)abtn[q].setAttribute('aria-pressed',q===k?'true':'false')});
     abtn[k]=b;bar.appendChild(b);
   }
   add(box,wrap,nameBox,bar);
