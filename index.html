@@ -115,6 +115,8 @@ input[type=checkbox]{accent-color:var(--gold)}
 .carousel .nav{position:absolute;top:50%;transform:translateY(-50%);padding:8px 14px}
 .carousel .nav.l{left:8px}
 .carousel .nav.r{right:8px}
+.carousel-anims{display:flex;gap:8px;justify-content:center;flex-wrap:wrap;margin-top:8px}
+.carousel-anims .btn.on{outline:3px solid var(--gold);outline-offset:-3px}
 .carousel-name{text-align:center;margin-top:8px}
 .carousel-name .cn{font-size:var(--b)}
 .carousel-name .ct2{font-size:var(--t)}
@@ -781,7 +783,15 @@ function startCarousel(box,p,skins){
   add(wrap,bg,canvas,title,N>1?prev:null,N>1?next:null);
   const nm=el('div',{class:'cn'}),th=el('div',{class:'ct2'}),cnt=el('div',{class:'hint'});
   const nameBox=el('div',{class:'panel carousel-name'},nm,th,cnt);
-  add(box,wrap,nameBox);
+  // one button per preview pose
+  const bar=el('div',{class:'carousel-anims'});
+  const abtn={};
+  for(const [k,label] of [['idle','Idle'],['crouch','Crouch'],['hit','Hit'],['run','Run']]){
+    const b=el('button',{class:'btn'+(k==='idle'?' on':''),type:'button',text:label});
+    b.addEventListener('click',()=>{mode=k;for(const q in abtn)abtn[q].classList.toggle('on',q===k)});
+    abtn[k]=b;bar.appendChild(b);
+  }
+  add(box,wrap,nameBox,bar);
 
   let renderer;
   try{renderer=new T.WebGLRenderer({canvas,antialias:false,alpha:true})}
@@ -799,8 +809,7 @@ function startCarousel(box,p,skins){
   const still=window.matchMedia&&matchMedia('(prefers-reduced-motion: reduce)').matches;
   let pos=0,target=0,spacing=1.4,spin=0,raf=0,last=performance.now(),dead=false;
   // the middle skin plays the same three previews as the game menu, one after the other
-  const CYCLE=[['crouch',1.8],['hit',1.8],['run',2.4]],CYC_LEN=6;
-  let clock=0;
+  let mode='idle';
 
   function label(){
     const i=((target%N)+N)%N;
@@ -827,9 +836,7 @@ function startCarousel(box,p,skins){
     if(document.hidden)return;
     pos+=(target-pos)*Math.min(1,dt*9);
     spin+=dt;
-    if(!still)clock+=dt;
-    let an='',at=clock%CYC_LEN;
-    for(const [n,d] of CYCLE){if(at<d){an=n;break}at-=d}
+    const an=mode;
     models.forEach((m,i)=>{
       let d=i-pos;
       if(cyc)d=((d+N/2)%N+N)%N-N/2;   // shortest way around
@@ -845,7 +852,7 @@ function startCarousel(box,p,skins){
       const mid=!still&&a<.5,k=Math.min(1,dt*8);
       m.c+=((mid&&an==='crouch'?1:0)-m.c)*k;
       m.r+=((mid&&an==='run'?1:0)-m.r)*k;
-      m.pose(spin,m.c,m.r,mid&&an==='hit'?(at/.9)%1:0);
+      m.pose(spin,m.c,m.r,mid&&an==='hit'?(spin/.4)%1:0);
       const b=1-.4*Math.min(a,1.5)/1.5;
       m.mats.forEach(mt=>mt.color.setScalar(b));
     });
