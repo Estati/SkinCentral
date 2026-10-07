@@ -103,6 +103,21 @@ select:disabled{opacity:.5}
 select option{background:#000;color:#fff;font-family:inherit}
 select option:checked{background:#7c86b8;color:var(--gold)}
 input[type=checkbox]{accent-color:var(--gold)}
+/* 3d skin carousel on the pack page */
+.cwrap{margin:12px 0}
+.carousel{position:relative;height:min(62vw,360px);min-height:240px;overflow:hidden;background:#2b3a2b;border:3px solid #000;outline:3px solid #6d6d6d;user-select:none;-webkit-user-select:none}
+.carousel:focus-visible{outline-color:var(--gold)}
+.carousel-bg{position:absolute;inset:-14px;background:#3d4f3d center/cover no-repeat;filter:blur(7px) brightness(.75)}
+.carousel canvas{position:absolute;inset:0;width:100%;height:100%;cursor:grab;touch-action:pan-y}
+.carousel-title{position:absolute;top:0;left:0;right:0;text-align:center;padding:6px 8px;background:rgba(0,0,0,.4);text-shadow:2px 2px 0 #3f3f3f;pointer-events:none}
+.carousel-title .ct{font-size:var(--b)}
+.carousel-title .cs{font-size:var(--t);color:#ddd}
+.carousel .nav{position:absolute;top:50%;transform:translateY(-50%);padding:8px 14px}
+.carousel .nav.l{left:8px}
+.carousel .nav.r{right:8px}
+.carousel-name{text-align:center;margin-top:8px}
+.carousel-name .cn{font-size:var(--b)}
+.carousel-name .ct2{font-size:var(--t)}
 /* upload progress bar, black box with a green fill like the xp bar */
 .bar{height:24px;background:#000;border:3px solid #6d6d6d;margin:12px 0 4px;padding:2px}
 .bar>i{display:block;height:100%;width:0;background:#55ff55;box-shadow:inset 0 -4px 0 #2f9f2f,inset 0 4px 0 #a5ffa5;transition:width .2s steps(8)}
@@ -483,7 +498,287 @@ function showShots(list,start,alt){
   x.focus();
 }
 
+/* ---------- reading skins.pck (the skin pack file lce uses) ----------
+   layout (from the community docs, checked on one xbox/ps3/wii u style file):
+   version, list of property names, file table (size, type, name), then for every file:
+   its properties followed by its data. xbox 360, ps3 and wii u files are big endian, other platforms
+   are probably little endian so we try both. returns null if it doesnt look like a pck */
+function readPck(buf){
+  const dv=new DataView(buf),len=buf.byteLength;
+  for(const le of [false,true]){
+    try{return readPckAs(dv,len,buf,le)}catch(e){}
+  }
+  return null;
+}
+function readPckAs(dv,len,buf,le){
+  let p=0;
+  const fail=()=>{throw new Error('bad pck')};
+  const i32=()=>{if(p+4>len)fail();const v=dv.getUint32(p,le);p+=4;return v};
+  const str=n=>{
+    if(n>5000||p+n*2>len)fail();
+    let s='';for(let i=0;i<n;i++){s+=String.fromCharCode(dv.getUint16(p,le));p+=2}
+    return s;
+  };
+  const ver=i32();if(ver<1||ver>10)fail();
+  const nn=i32();if(nn>500)fail();
+  const names={};
+  for(let i=0;i<nn;i++){const idx=i32(),ln=i32();names[idx]=str(ln);i32()}
+  // some versions have one extra number after the name list (not seen in the test file)
+  if(Object.values(names).includes('XMLVERSION'))i32();
+  const nf=i32();if(nf>5000)fail();
+  const files=[];
+  for(let i=0;i<nf;i++){const size=i32(),type=i32(),ln=i32();const name=str(ln);i32();files.push({size,type,name,props:{}})}
+  for(const f of files){
+    const pc=i32();if(pc>500)fail();
+    for(let i=0;i<pc;i++){const k=i32(),ln=i32();const v=str(ln);i32();f.props[names[k]||k]=v}
+    if(p+f.size>len)fail();
+    f.data=new Uint8Array(buf,p,f.size);p+=f.size;
+  }
+  return files;
+}
+// the skins in a pck: type 0 files that are png. max 100 so a weird file cant freeze the page
+const SLIM_FLAG=0x80000;   // ANIM bit for slim (alex style) arms, from the community docs, not tested yet
+function pckSkins(files){
+  return files.filter(f=>f.type===0&&/\.png$/i.test(f.name)).slice(0,100).map(f=>{
+    const anim=parseInt(f.props.ANIM||'0')||0;
+    return {name:(f.props.DISPLAYNAME||'Skin').slice(0,40),theme:(f.props.THEMENAME||'').slice(0,40),slim:!!(anim&SLIM_FLAG),png:f.data};
+  });
+}
+// shows what we found right under the file picker (upload form and edit form)
+async function checkPckInput(input,info){
+  info.className='hint';info.textContent='';
+  const f=input.files[0];if(!f)return;
+  if(f.size>MAXB.skins){info.className='msg err';info.textContent='That file is too big (max 3 MB). Add just the skins.pck, not the whole pack.';input.value='';return}
+  let skins=[];
+  try{const files=readPck(await f.arrayBuffer());skins=files?pckSkins(files):[]}catch{}
+  if(!skins.length){info.className='msg err';info.textContent='No skins found in that file. Make sure it is the skins.pck from your pack.';input.value='';return}
+  info.textContent='Found '+countText(skins.length,'skin')+': '+skins.slice(0,4).map(s=>s.name).join(', ')+(skins.length>4?'...':'');
+}
+
+/* ---------- 3d skin carousel (pack page) ----------
+   reads the skins.pck the creator added, pulls out the skin pngs and shows them on little
+   minecraft models, one big in the middle and the rest to the sides like the lce menu.
+   three.js loads from cdnjs the first time a pack with skins is opened */
+let carouselStop=null;   // showPack/route call this when you leave so the webgl stuff gets cleaned up
+let threeP=null;
+function loadThree(){
+  if(window.THREE)return Promise.resolve();
+  if(!threeP)threeP=new Promise((ok,no)=>{
+    const s=document.createElement('script');
+    s.src='https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js';
+    s.onload=ok;
+    s.onerror=()=>{threeP=null;no(new Error('three.js did not load'))};
+    document.head.appendChild(s);
+  });
+  return threeP;
+}
+function loadSkinImage(bytes){
+  return new Promise(res=>{
+    const url=URL.createObjectURL(new Blob([bytes],{type:'image/png'}));
+    const im=new Image();
+    // only normal skin sizes: 64x64 or the old 64x32
+    im.onload=()=>{URL.revokeObjectURL(url);res(im.width===64&&(im.height===64||im.height===32)?im:null)};
+    im.onerror=()=>{URL.revokeObjectURL(url);res(null)};
+    im.src=url;
+  });
+}
+// texture rectangles of a box with sides w,h,d whose texture starts at u,v. mirror = left limb from a 64x32 skin
+function setBoxUV(geo,W,H,w,h,d,u,v,mirror){
+  const r={
+    right:[u,v+d,u+d,v+d+h],front:[u+d,v+d,u+d+w,v+d+h],left:[u+d+w,v+d,u+2*d+w,v+d+h],
+    back:[u+2*d+w,v+d,u+2*d+2*w,v+d+h],top:[u+d,v,u+d+w,v+d],bottom:[u+d+w,v,u+d+2*w,v+d]
+  };
+  // three.js box face order: +x -x +y -y +z -z (the model faces +z, so +x is the characters left)
+  const order=mirror?['right','left','top','bottom','front','back']:['left','right','top','bottom','front','back'];
+  const uv=geo.attributes.uv;
+  order.forEach((n,f)=>{
+    const [x0,y0,x1,y1]=r[n];
+    let u0=x0/W,u1=x1/W;
+    const vt=1-y0/H,vb=1-y1/H;
+    if(mirror){const t=u0;u0=u1;u1=t}
+    uv.setXY(f*4,u0,vt);uv.setXY(f*4+1,u1,vt);uv.setXY(f*4+2,u0,vb);uv.setXY(f*4+3,u1,vb);
+  });
+  uv.needsUpdate=true;
+}
+// builds one skin: head, body, arms, legs + the second layer (hat, jacket, sleeves, pants)
+function makeSkinModel(img,slim){
+  const T=THREE;
+  const W=img.width,H=img.height,tall=H===64;
+  const tex=new T.Texture(img);
+  tex.magFilter=T.NearestFilter;tex.minFilter=T.NearestFilter;tex.generateMipmaps=false;tex.needsUpdate=true;
+  const base=new T.MeshLambertMaterial({map:tex,alphaTest:.5});
+  const over=new T.MeshLambertMaterial({map:tex,transparent:true,alphaTest:.05});
+  const aw=slim?3:4,ax=4+aw/2;
+  // name, size, center (feet on y=0), texture start, mirror, inflate
+  const defs=[
+    [[8,8,8],[0,28,0],[0,0],false,0],
+    [[8,12,4],[0,18,0],[16,16],false,0],
+    [[aw,12,4],[-ax,18,0],[40,16],false,0],
+    [[aw,12,4],[ax,18,0],tall?[32,48]:[40,16],!tall,0],
+    [[4,12,4],[-2,6,0],[0,16],false,0],
+    [[4,12,4],[2,6,0],tall?[16,48]:[0,16],!tall,0],
+    [[8,8,8],[0,28,0],[32,0],false,.5]   // hat
+  ];
+  if(tall)defs.push(
+    [[8,12,4],[0,18,0],[16,32],false,.25],
+    [[aw,12,4],[-ax,18,0],[40,32],false,.25],
+    [[aw,12,4],[ax,18,0],[48,48],false,.25],
+    [[4,12,4],[-2,6,0],[0,32],false,.25],
+    [[4,12,4],[2,6,0],[0,48],false,.25]);
+  const inner=new T.Group();
+  const geos=[];
+  for(const [[w,h,d],[cx,cy,cz],[u,v],mirror,inf] of defs){
+    const g=new T.BoxGeometry(w+2*inf,h+2*inf,d+2*inf);
+    setBoxUV(g,W,H,w,h,d,u,v,mirror);
+    geos.push(g);
+    const m=new T.Mesh(g,inf?over:base);
+    m.position.set(cx,cy-16,cz);   // -16 puts the middle of the model on y=0
+    inner.add(m);
+  }
+  inner.scale.setScalar(1/16);
+  const holder=new T.Group();
+  holder.add(inner);
+  return {holder,mats:[base,over],dispose(){geos.forEach(g=>g.dispose());base.dispose();over.dispose();tex.dispose()}};
+}
+
+// the whole "Skins in this pack" section. fetches the pck, builds the carousel when everything is ready
+function skinCarousel(p){
+  const box=el('div',{class:'cwrap'});
+  const status=el('p',{class:'hint',text:'Loading skins...'});
+  add(box,el('h3',{text:'Skins in this pack'}),status);
+  fetch('/files/'+p.id+'/skins').then(r=>{if(!r.ok)throw new Error('no file');return r.arrayBuffer()})
+    .then(buf=>{
+      const files=readPck(buf);
+      const found=files?pckSkins(files):[];
+      if(!found.length)throw new Error('no skins');
+      return Promise.all([loadThree(),Promise.all(found.map(s=>loadSkinImage(s.png)))]).then(([,imgs])=>{
+        const skins=found.map((s,i)=>({...s,img:imgs[i]})).filter(s=>s.img);
+        if(!skins.length)throw new Error('no usable skins');
+        return skins;
+      });
+    })
+    .then(skins=>{
+      if(!box.isConnected)return;   // they already left the page
+      status.remove();
+      startCarousel(box,p,skins);
+    })
+    .catch(()=>{status.textContent='Could not load the skin preview.'});
+  return box;
+}
+
+function startCarousel(box,p,skins){
+  const T=THREE,N=skins.length;
+  const wrap=el('div',{class:'carousel',tabindex:'0',role:'group','aria-label':'Skin carousel. Use the left and right arrow keys.'});
+  const bg=el('div',{class:'carousel-bg'});
+  if(p.images&&p.images[0])bg.style.backgroundImage='url("'+p.images[0]+'")';
+  const title=el('div',{class:'carousel-title'},el('div',{class:'ct',text:p.name}),el('div',{class:'cs',text:'Skin Pack'}));
+  const canvas=el('canvas');
+  const prev=el('button',{class:'btn nav l',type:'button',text:'<','aria-label':'Previous skin'});
+  const next=el('button',{class:'btn nav r',type:'button',text:'>','aria-label':'Next skin'});
+  add(wrap,bg,canvas,title,N>1?prev:null,N>1?next:null);
+  const nm=el('div',{class:'cn'}),th=el('div',{class:'ct2'}),cnt=el('div',{class:'hint'});
+  const nameBox=el('div',{class:'panel carousel-name'},nm,th,cnt);
+  add(box,wrap,nameBox);
+
+  let renderer;
+  try{renderer=new T.WebGLRenderer({canvas,antialias:false,alpha:true})}
+  catch{wrap.remove();nameBox.remove();add(box,el('p',{class:'hint',text:'Your browser could not start the 3D preview.'}));return}
+  renderer.setPixelRatio(Math.min(window.devicePixelRatio||1,2));
+  const scene=new T.Scene();
+  scene.add(new T.AmbientLight(0xffffff,.85));
+  const sun=new T.DirectionalLight(0xffffff,.5);sun.position.set(-2,3,4);scene.add(sun);
+  const camera=new T.PerspectiveCamera(28,1,.1,50);
+  camera.position.set(0,.1,7.2);camera.lookAt(0,0,0);
+
+  const models=skins.map(s=>{const m=makeSkinModel(s.img,s.slim);scene.add(m.holder);return m});
+  const cyc=N>=3;   // wraps around when there are enough skins
+  const maxVis=cyc?Math.min(2,Math.floor((N-1)/2)):Math.min(2,N-1);
+  const still=window.matchMedia&&matchMedia('(prefers-reduced-motion: reduce)').matches;
+  let pos=0,target=0,spacing=1.4,spin=0,raf=0,last=performance.now(),dead=false;
+
+  function label(){
+    const i=((target%N)+N)%N;
+    nm.textContent=skins[i].name;th.textContent=skins[i].theme;cnt.textContent=(i+1)+' / '+N;
+  }
+  function go(dir){
+    target+=dir;
+    if(!cyc)target=Math.max(0,Math.min(N-1,target));
+    label();
+  }
+  function resize(){
+    const w=wrap.clientWidth,h=wrap.clientHeight;
+    if(!w||!h)return;
+    renderer.setSize(w,h,false);
+    camera.aspect=w/h;camera.updateProjectionMatrix();
+    const visibleW=2*7.2*Math.tan(14*Math.PI/180)*camera.aspect;
+    spacing=visibleW/5.6;
+  }
+  function frame(now){
+    if(dead)return;
+    raf=requestAnimationFrame(frame);
+    if(!wrap.isConnected){stop();return}
+    const dt=Math.min(.05,(now-last)/1000);last=now;
+    if(document.hidden)return;
+    pos+=(target-pos)*Math.min(1,dt*9);
+    spin+=dt;
+    models.forEach((m,i)=>{
+      let d=i-pos;
+      if(cyc)d=((d+N/2)%N+N)%N-N/2;   // shortest way around
+      const a=Math.abs(d);
+      m.holder.visible=a<=maxVis+.6;
+      if(!m.holder.visible)return;
+      const sc=1.12-.24*Math.min(a,2);
+      m.holder.scale.setScalar(sc);
+      m.holder.position.set(d*spacing,sc-1.12,-Math.min(a,2)*.5);   // feet stay on the same line
+      const turnIn=-Math.sign(d)*Math.min(a,1)*.5;                // side ones face the middle a bit
+      const sway=still?0:Math.sin(spin*.8)*.45*Math.max(0,1-a);   // the middle one slowly turns
+      m.holder.rotation.y=turnIn+sway;
+      const b=1-.4*Math.min(a,1.5)/1.5;
+      m.mats.forEach(mt=>mt.color.setScalar(b));
+    });
+    renderer.render(scene,camera);
+  }
+  function stop(){
+    if(dead)return;dead=true;
+    cancelAnimationFrame(raf);ro.disconnect();
+    models.forEach(m=>m.dispose());
+    renderer.dispose();
+    if(renderer.forceContextLoss)renderer.forceContextLoss();
+    if(carouselStop===stop)carouselStop=null;
+  }
+  const ro=new ResizeObserver(resize);ro.observe(wrap);
+
+  prev.addEventListener('click',()=>go(-1));
+  next.addEventListener('click',()=>go(1));
+  wrap.addEventListener('keydown',e=>{
+    if(e.key==='ArrowLeft'){e.preventDefault();go(-1)}
+    else if(e.key==='ArrowRight'){e.preventDefault();go(1)}
+  });
+  // drag or swipe sideways to flip, or tap the left/right side of the picture
+  let dragX=null,moved=false;
+  canvas.addEventListener('pointerdown',e=>{dragX=e.clientX;moved=false;try{canvas.setPointerCapture(e.pointerId)}catch{}});
+  canvas.addEventListener('pointermove',e=>{
+    if(dragX===null)return;
+    const dx=e.clientX-dragX;
+    if(Math.abs(dx)>40){go(dx<0?1:-1);dragX=e.clientX;moved=true}
+  });
+  canvas.addEventListener('pointerup',e=>{
+    if(dragX!==null&&!moved){
+      const r=canvas.getBoundingClientRect(),x=(e.clientX-r.left)/r.width;
+      if(x<.33)go(-1);else if(x>.67)go(1);
+    }
+    dragX=null;
+  });
+  canvas.addEventListener('pointercancel',()=>{dragX=null});
+
+  if(carouselStop)carouselStop();
+  carouselStop=stop;
+  label();resize();
+  raf=requestAnimationFrame(frame);
+}
+
 function showPack(p){
+  if(carouselStop)carouselStop();   // clean up the 3d carousel of the pack we were looking at
   const d=$('detail');d.textContent='';document.title=p.name+' | Skin Central';
   const dl=el('div',{class:'dl'});
   p.files.forEach(f=>{
@@ -494,7 +789,9 @@ function showPack(p){
   d.append(
     el('div',{class:'head'},icon(p,'big'),el('div',{},
       el('h2',{text:p.name}),el('p',{class:'by'},el('span',{text:'By '}),creatorLink(p),el('span',{text:', added '+p.date})),el('p',{class:'by',text:typeOf(p)==='texture'?'Texture pack':'Skin pack'}),typeof p.downloads==='number'?el('p',{class:'by',text:countText(p.downloads,'download')}):null,el('p',{class:'tags',text:p.tags.join(', ')}))),
-    el('p',{class:'desc',text:p.description}),el('h3',{text:'Download'}),dl);
+    el('p',{class:'desc',text:p.description}));
+  if(p.hasSkins&&p.id)d.append(skinCarousel(p));   // 3d carousel, only if the creator added a skins.pck
+  d.append(el('h3',{text:'Download'}),dl);
   if(p.images&&p.images.length){
     const g=el('div',{class:'shots'});
     p.images.forEach((src,n)=>{
@@ -515,7 +812,7 @@ function showPack(p){
    limits here match src/index.js, the server checks them again anyway */
 const meP=fetch('/api/me').then(r=>r.json()).catch(()=>({loggedIn:false}));
 const PLATFORMS=[['xbox360','Xbox 360'],['ps3','PS3'],['wiiu','Wii U'],['vita','PS Vita'],['switch','Switch']];
-const MAXB={icon:512*1024,shot:2*1024*1024,pack:5*1024*1024,total:20*1024*1024,anonTotal:10*1024*1024,bigFile:150*1024*1024,bigTotal:300*1024*1024};
+const MAXB={icon:512*1024,shot:2*1024*1024,pack:5*1024*1024,total:20*1024*1024,anonTotal:10*1024*1024,bigFile:150*1024*1024,bigTotal:300*1024*1024,skins:3*1024*1024};
 const MB=1024*1024;
 
 /* ---------- big files: logged in people can send pack files over 5 MB in 8 MB pieces ---------- */
@@ -601,13 +898,21 @@ function showUpload(){
     const setHint=()=>{kindHint.textContent=kind.value==='texture'
       ?'Texture packs can include music and maps too. Big files are fine, just keep this page open while it uploads.'
       :'Skin packs: custom skins for the Skin Packs menu.'};
-    kind.addEventListener('change',setHint);setHint();
+    kind.addEventListener('change',()=>{setHint();skinsBox.hidden=kind.value!=='skin'});
+    setHint();
     const name=el('input',{type:'text',id:'f-name',maxlength:'40'});
     const desc=el('textarea',{id:'f-desc',maxlength:'500'});
     const tags=el('input',{type:'text',id:'f-tags',maxlength:'200',placeholder:'youtuber, funny, boys'});
     const icon=el('input',{type:'file',id:'f-icon',accept:IMG_OK});
     const shots=[1,2,3,4].map(i=>el('input',{type:'file',id:'f-shot'+i,accept:IMG_OK}));
     const pf=PLATFORMS.map(([k,n])=>[k,n,el('input',{type:'file',id:'f-file-'+k})]);
+    const skinsIn=el('input',{type:'file',id:'f-skins',accept:'.pck'});
+    const skinsInfo=el('p',{class:'hint'});
+    skinsIn.addEventListener('change',()=>checkPckInput(skinsIn,skinsInfo));
+    const skinsBox=el('div',{},
+      el('h3',{text:'3D skin preview (optional)'}),
+      el('p',{class:'hint',text:'Add the skins.pck from your pack (the small file inside it, up to 3 MB) and your pack page gets a 3D skin carousel like the in-game menu. Not the whole pack, just the skins.pck.'}),
+      skinsIn,skinsInfo);
     const msg=el('p',{class:'msg',role:'status'});
     const go=el('button',{class:'btn',type:'button',text:'Submit for review'});
     const mine=el('div',{});
@@ -631,6 +936,7 @@ function showUpload(){
       el('p',{class:'hint',text:'PNG, JPG or WebP, up to 512 KB.'}),icon,
       el('h3',{text:'Screenshots (optional)'}),
       el('p',{class:'hint',text:'Up to 4 images. PNG, JPG or WebP, up to 2 MB each.'}),...shots,
+      skinsBox,
       el('h3',{text:'Pack files'}),
       el('p',{class:'hint',text:anon?'Add a file for each platform you have. At least one is required, up to 5 MB each and 10 MB for the whole upload. Log in to upload bigger files.':'Add a file for each platform you have. At least one is required, up to 150 MB each. Files over 5 MB upload in pieces with a progress bar, so keep this page open until it says done.'}));
     pf.forEach(([k,n,input])=>u.append(el('label',{for:'f-file-'+k,text:n}),input));
@@ -662,6 +968,11 @@ function showUpload(){
         const f=shots[i].files[0];if(!f)continue;
         if(f.size>MAXB.shot)return fail('Screenshot '+(i+1)+' is too big (max 2 MB).');
         fd.append('shot'+(i+1),f);total+=f.size;
+      }
+      const sk=skinsIn.files[0];
+      if(sk&&kind.value==='skin'){
+        if(sk.size>MAXB.skins)return fail('The skins.pck is too big (max 3 MB).');
+        fd.append('skins',sk);total+=sk.size;
       }
       const bigList=[];let bigSum=0;
       for(const [k,n,input] of pf){
@@ -714,7 +1025,7 @@ function showUpload(){
         const d=await r.json().catch(()=>({}));
         if(r.ok&&d.ok){
           msg.className='msg ok';msg.textContent=d.message;
-          name.value='';desc.value='';tags.value='';icon.value='';bigDone.clear();
+          name.value='';desc.value='';tags.value='';icon.value='';bigDone.clear();skinsIn.value='';skinsInfo.textContent='';
           shots.forEach(i=>{i.value=''});pf.forEach(x=>{x[2].value=''});
           loadMine();
         }else fail(d.error||'Upload failed. Please try again.');
@@ -799,7 +1110,7 @@ function showAdmin(){
     a.append(tabs,msg,list);
     let current='pending';
     // mods can edit/delete any pack, edits go live right away
-    const editShape=p=>({id:p.id,name:p.name,description:p.description,tags:p.tags,status:p.status,images:p.imageNames||[],files:p.fileInfo||[]});
+    const editShape=p=>({id:p.id,name:p.name,description:p.description,tags:p.tags,status:p.status,type:p.type,hasSkins:p.hasSkins,images:p.imageNames||[],files:p.fileInfo||[]});
     async function removePack(p){
       msg.className='msg';msg.textContent='Deleting...';
       try{
@@ -1383,6 +1694,10 @@ function showEdit(p,card,opts){
     const n='shot'+i;
     return {n,i,has:(p.images||[]).includes(n),input:el('input',{type:'file',accept:IMG_OK,'aria-label':'Screenshot '+i}),rm:el('input',{type:'checkbox'})};
   });
+  const skinsIn=el('input',{type:'file',accept:'.pck','aria-label':'New skins.pck'});
+  const skinsInfo=el('p',{class:'hint'});
+  skinsIn.addEventListener('change',()=>checkPckInput(skinsIn,skinsInfo));
+  const skinsRm=el('input',{type:'checkbox'});
   const fileRows=PLATFORMS.map(([k,n])=>({
     k,n,cur:(p.files||[]).find(f=>f.pkey===k),input:el('input',{type:'file','aria-label':n+' file'}),rm:el('input',{type:'checkbox'})
   }));
@@ -1402,6 +1717,11 @@ function showEdit(p,card,opts){
       if(f){if(f.size>MAXB.shot)return bad('Screenshot '+r.i+' is too big (max 2 MB).');fd.append(r.n,f)}
       else if(r.has&&r.rm.checked)fd.append('remove_'+r.n,'1');
     }
+    const sk=skinsIn.files[0];
+    if(sk){
+      if(sk.size>MAXB.skins)return bad('The skins.pck is too big (max 3 MB).');
+      fd.append('skins',sk);
+    }else if(p.hasSkins&&skinsRm.checked)fd.append('remove_skins','1');
     let kept=(p.files||[]).length;
     for(const r of fileRows){
       const f=r.input.files[0];
@@ -1443,6 +1763,11 @@ function showEdit(p,card,opts){
   shotRows.forEach(r=>add(card,
     el('label',{text:'Screenshot '+r.i+(r.has?' (one is uploaded)':' (empty)')}),r.input,
     r.has?el('label',{class:'chk'},r.rm,el('span',{text:'Remove this screenshot'})):null));
+  if(p.type!=='texture')add(card,
+    el('h3',{text:'3D skin preview'}),
+    el('p',{class:'hint',text:p.hasSkins?'A skins.pck is uploaded. Choose a file only to replace it (up to 3 MB).':'Add the skins.pck from your pack (up to 3 MB) to get a 3D skin carousel on the pack page.'}),
+    skinsIn,skinsInfo,
+    p.hasSkins?el('label',{class:'chk'},skinsRm,el('span',{text:'Remove the skin preview'})):null);
   add(card,
     el('h3',{text:'Pack files'}),
     el('p',{class:'hint',text:'A new file replaces the current one for that platform, up to 5 MB each. You must keep at least one.'}));
@@ -1654,6 +1979,7 @@ function showEditProfile(u){
 
 function route(){
   const h=location.hash;
+  if(carouselStop)carouselStop();
   if(h==='#textures')packType='texture';else if(h===''||h==='#skins')packType='skin';
   const m=h.match(/^#\/pack\/(.+)$/);
   const p=m&&packs.find(x=>x.slug===decodeURIComponent(m[1]));
