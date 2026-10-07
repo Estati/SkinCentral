@@ -527,10 +527,10 @@ function readPckAs(dv,len,buf,le){
   if(Object.values(names).includes('XMLVERSION'))i32();
   const nf=i32();if(nf>5000)fail();
   const files=[];
-  for(let i=0;i<nf;i++){const size=i32(),type=i32(),ln=i32();const name=str(ln);i32();files.push({size,type,name,props:{}})}
+  for(let i=0;i<nf;i++){const size=i32(),type=i32(),ln=i32();const name=str(ln);i32();files.push({size,type,name,props:{},multi:{}})}
   for(const f of files){
     const pc=i32();if(pc>500)fail();
-    for(let i=0;i<pc;i++){const k=i32(),ln=i32();const v=str(ln);i32();f.props[names[k]||k]=v}
+    for(let i=0;i<pc;i++){const k=i32(),ln=i32();const v=str(ln);i32();const kn=names[k]||k;f.props[kn]=v;(f.multi[kn]||(f.multi[kn]=[])).push(v)}
     if(p+f.size>len)fail();
     f.data=new Uint8Array(buf,p,f.size);p+=f.size;
   }
@@ -538,10 +538,27 @@ function readPckAs(dv,len,buf,le){
 }
 // the skins in a pck: type 0 files that are png. max 100 so a weird file cant freeze the page
 const SLIM_FLAG=0x80000;   // ANIM bit for slim (alex style) arms, from the community docs, not tested yet
+// ANIM bit flags that hide the normal body parts (from the game's skin anim flags, from memory, not tested against the game)
+const ANIM_OFF={head:1<<10,arm0:1<<11,arm1:1<<12,body:1<<13,leg0:1<<14,leg1:1<<15,hat:1<<16,sleeve0:1<<20,sleeve1:1<<21,pants0:1<<22,pants1:1<<23,jacket:1<<24};
+// which body part each BOX line sticks to
+const BOX_PART={HEAD:'head',HELMET:'head',BODY:'body',JACKET:'body',WAIST:'body',ARM0:'arm0',SLEEVE0:'arm0',ARM1:'arm1',SLEEVE1:'arm1',LEG0:'leg0',PANTS0:'leg0',SOCK0:'leg0',BOOT0:'leg0',LEG1:'leg1',PANTS1:'leg1',SOCK1:'leg1',BOOT1:'leg1'};
+// "BOX:BODY x y z w h d u v [hideWithArmor mirror scale]", pixel units, y points down like in the game
+function parseBoxes(list){
+  const out=[];
+  for(const line of (list||[]).slice(0,1500)){
+    const t=String(line).trim().split(/\s+/);
+    const part=BOX_PART[(t[0]||'').toUpperCase()];
+    if(!part)continue;
+    const n=t.slice(1).map(Number);
+    if(n.length<8||n.slice(0,8).some(x=>!isFinite(x)||Math.abs(x)>1000))continue;
+    out.push({part,x:n[0],y:n[1],z:n[2],w:n[3],h:n[4],d:n[5],u:n[6],v:n[7],mirror:n[9]===1,scale:isFinite(n[10])?n[10]:0});
+  }
+  return out;
+}
 function pckSkins(files){
   return files.filter(f=>f.type===0&&/\.png$/i.test(f.name)).slice(0,100).map(f=>{
     const anim=parseInt(f.props.ANIM||'0')||0;
-    return {name:(f.props.DISPLAYNAME||'Skin').slice(0,40),theme:(f.props.THEMENAME||'').slice(0,40),slim:!!(anim&SLIM_FLAG),png:f.data};
+    return {name:(f.props.DISPLAYNAME||'Skin').slice(0,40),theme:(f.props.THEMENAME||'').slice(0,40),slim:!!(anim&SLIM_FLAG),anim,boxes:parseBoxes(f.multi&&f.multi.BOX),png:f.data};
   });
 }
 // shows what we found right under the file picker (upload form and edit form)
@@ -600,45 +617,131 @@ function setBoxUV(geo,W,H,w,h,d,u,v,mirror){
   });
   uv.needsUpdate=true;
 }
-// builds one skin: head, body, arms, legs + the second layer (hat, jacket, sleeves, pants)
-function makeSkinModel(img,slim){
+// glues lots of little boxes into one mesh so a 450 box plane is still one draw call
+function mergeBoxes(list){
+  let vc=0,ic=0;
+  for(const o of list){vc+=o.g.attributes.position.count;ic+=o.g.index.count}
+  const pos=new Float32Array(vc*3),nor=new Float32Array(vc*3),uv=new Float32Array(vc*2),idx=new Uint32Array(ic);
+  let vo=0,io=0;
+  for(const {g,x,y,z} of list){
+    const p=g.attributes.position,n=g.attributes.normal,t=g.attributes.uv;
+    for(let i=0;i<p.count;i++){
+      const k=vo+i;
+      pos[k*3]=p.getX(i)+x;pos[k*3+1]=p.getY(i)+y;pos[k*3+2]=p.getZ(i)+z;
+      nor[k*3]=n.getX(i);nor[k*3+1]=n.getY(i);nor[k*3+2]=n.getZ(i);
+      uv[k*2]=t.getX(i);uv[k*2+1]=t.getY(i);
+    }
+    for(let i=0;i<g.index.count;i++)idx[io+i]=g.index.getX(i)+vo;
+    vo+=p.count;io+=g.index.count;g.dispose();
+  }
+  const out=new THREE.BufferGeometry();
+  out.setAttribute('position',new THREE.BufferAttribute(pos,3));
+  out.setAttribute('normal',new THREE.BufferAttribute(nor,3));
+  out.setAttribute('uv',new THREE.BufferAttribute(uv,2));
+  out.setIndex(new THREE.BufferAttribute(idx,1));
+  return out;
+}
+// builds one skin out of body parts (head, body, arms, legs) that can move, plus the second layer
+// and any custom BOX models from the pck. returns the model and a pose() for the preview animations
+function makeSkinModel(img,slim,skin){
   const T=THREE;
   const W=img.width,H=img.height,tall=H===64;
+  const anim=(skin&&skin.anim)||0,custom=(skin&&skin.boxes)||[];
+  const off=k=>(anim&ANIM_OFF[k])!==0;
   const tex=new T.Texture(img);
   tex.magFilter=T.NearestFilter;tex.minFilter=T.NearestFilter;tex.generateMipmaps=false;tex.needsUpdate=true;
   const base=new T.MeshLambertMaterial({map:tex,alphaTest:.5});
   const over=new T.MeshLambertMaterial({map:tex,transparent:true,alphaTest:.05});
-  const aw=slim?3:4,ax=4+aw/2;
-  // name, size, center (feet on y=0), texture start, mirror, inflate
-  const defs=[
-    [[8,8,8],[0,28,0],[0,0],false,0],
-    [[8,12,4],[0,18,0],[16,16],false,0],
-    [[aw,12,4],[-ax,18,0],[40,16],false,0],
-    [[aw,12,4],[ax,18,0],tall?[32,48]:[40,16],!tall,0],
-    [[4,12,4],[-2,6,0],[0,16],false,0],
-    [[4,12,4],[2,6,0],tall?[16,48]:[0,16],!tall,0],
-    [[8,8,8],[0,28,0],[32,0],false,.5]   // hat
-  ];
-  if(tall)defs.push(
-    [[8,12,4],[0,18,0],[16,32],false,.25],
-    [[aw,12,4],[-ax,18,0],[40,32],false,.25],
-    [[aw,12,4],[ax,18,0],[48,48],false,.25],
-    [[4,12,4],[-2,6,0],[0,32],false,.25],
-    [[4,12,4],[2,6,0],[0,48],false,.25]);
-  const inner=new T.Group();
-  const geos=[];
-  for(const [[w,h,d],[cx,cy,cz],[u,v],mirror,inf] of defs){
-    const g=new T.BoxGeometry(w+2*inf,h+2*inf,d+2*inf);
-    setBoxUV(g,W,H,w,h,d,u,v,mirror);
-    geos.push(g);
-    const m=new T.Mesh(g,inf?over:base);
-    m.position.set(cx,cy-16,cz);   // -16 puts the middle of the model on y=0
-    inner.add(m);
+  const aw=slim?3:4;
+  // where each part turns (game pixels, y down). three.js side: x same, y up, z flipped so the front faces the camera
+  const piv={head:[0,0,0],body:[0,0,0],arm0:[-5,2,0],arm1:[5,2,0],leg0:[-2,12,0],leg1:[2,12,0]};
+  const items={head:[],body:[],arm0:[],arm1:[],leg0:[],leg1:[]};   // {x,y,z,w,h,d,u,v,mirror,inf}
+  const add=(p,x,y,z,w,h,d,u,v,mirror,inf)=>items[p].push({x,y,z,w,h,d,u,v,mirror,inf});
+  if(!off('head'))add('head',-4,-8,-4,8,8,8,0,0,false,0);
+  if(!off('hat'))add('head',-4,-8,-4,8,8,8,32,0,false,.5);
+  if(!off('body'))add('body',-4,0,-2,8,12,4,16,16,false,0);
+  if(tall&&!off('jacket'))add('body',-4,0,-2,8,12,4,16,32,false,.25);
+  if(!off('arm0'))add('arm0',slim?-2:-3,-2,-2,aw,12,4,40,16,false,0);
+  if(!off('arm1'))add('arm1',-1,-2,-2,aw,12,4,tall?32:40,tall?48:16,!tall,0);
+  if(!off('leg0'))add('leg0',-2,0,-2,4,12,4,0,16,false,0);
+  if(!off('leg1'))add('leg1',-2,0,-2,4,12,4,tall?16:0,tall?48:16,!tall,0);
+  if(tall){
+    if(!off('sleeve0'))add('arm0',slim?-2:-3,-2,-2,aw,12,4,40,32,false,.25);
+    if(!off('sleeve1'))add('arm1',-1,-2,-2,aw,12,4,48,48,false,.25);
+    if(!off('pants0'))add('leg0',-2,0,-2,4,12,4,0,32,false,.25);
+    if(!off('pants1'))add('leg1',-2,0,-2,4,12,4,0,48,false,.25);
   }
-  inner.scale.setScalar(1/16);
+  for(const b of custom)add(b.part,b.x,b.y,b.z,b.w,b.h,b.d,b.u,b.v,b.mirror,b.scale);
+
+  const inner=new T.Group(),parts={},baseP={},geos=[];
+  const lo=[1e9,1e9,1e9],hi=[-1e9,-1e9,-1e9];
+  for(const name of Object.keys(items)){
+    const [px,py,pz]=piv[name];
+    const g=new T.Group();
+    baseP[name]=[px,8-py,-pz];
+    g.position.set(px,8-py,-pz);
+    const baseList=[],overList=[];
+    for(const it of items[name]){
+      const s2=it.inf;
+      const bg=new T.BoxGeometry(Math.max(.01,it.w+2*s2),Math.max(.01,it.h+2*s2),Math.max(.01,it.d+2*s2));
+      setBoxUV(bg,W,H,it.w,it.h,it.d,it.u,it.v,it.mirror);
+      (s2?overList:baseList).push({g:bg,x:it.x+it.w/2,y:-(it.y+it.h/2),z:-(it.z+it.d/2)});
+      // bounds in the same units, at rest
+      const x0=px+it.x-s2,x1=px+it.x+it.w+s2,y0=py+it.y-s2,y1=py+it.y+it.h+s2,z0=pz+it.z-s2,z1=pz+it.z+it.d+s2;
+      lo[0]=Math.min(lo[0],x0);hi[0]=Math.max(hi[0],x1);
+      lo[1]=Math.min(lo[1],8-y1);hi[1]=Math.max(hi[1],8-y0);
+      lo[2]=Math.min(lo[2],-z1);hi[2]=Math.max(hi[2],-z0);
+    }
+    for(const [list,mat] of [[baseList,base],[overList,over]]){
+      if(!list.length)continue;
+      const mg=mergeBoxes(list);
+      geos.push(mg);
+      g.add(new T.Mesh(mg,mat));
+    }
+    parts[name]=g;inner.add(g);
+  }
+  // big custom models (a whole plane) get shrunk to fit and centered, normal skins stay as they are
+  let fit=1,cx=0,cy=0,cz=0;
+  if(custom.length&&hi[0]>lo[0]){
+    const sx=hi[0]-lo[0],sy=hi[1]-lo[1],sz=hi[2]-lo[2];
+    fit=Math.min(1,34/Math.max(sy,1),30/Math.max(sx,sz,1));
+    cx=(lo[0]+hi[0])/2;cy=(lo[1]+hi[1])/2;cz=(lo[2]+hi[2])/2;
+  }
+  inner.scale.setScalar(fit/16);
+  const baseY=-cy*fit/16;
+  inner.position.set(-cx*fit/16,baseY,-cz*fit/16);
   const holder=new T.Group();
   holder.add(inner);
-  return {holder,mats:[base,over],dispose(){geos.forEach(g=>g.dispose());base.dispose();over.dispose();tex.dispose()}};
+
+  // preview poses: c = crouch 0..1, r = running 0..1, p = punch progress 0..1 (0 = not punching)
+  function pose(t,c,r,p){
+    const P=parts,B=baseP;
+    const sw=Math.cos(t*9)*r;
+    const iz=(.05+Math.cos(t*1.7)*.05)*(1-r),ix=Math.sin(t*1.7)*.04*(1-r);
+    P.arm0.position.set(B.arm0[0],B.arm0[1],B.arm0[2]);
+    P.arm1.position.set(B.arm1[0],B.arm1[1],B.arm1[2]);
+    P.arm0.rotation.set(-sw*1.1+.4*c+ix,0,-iz);
+    P.arm1.rotation.set(sw*1.1+.4*c-ix,0,iz);
+    P.leg0.rotation.set(sw*1.2,0,0);
+    P.leg1.rotation.set(-sw*1.2,0,0);
+    P.leg0.position.set(B.leg0[0],B.leg0[1]+3*c,B.leg0[2]-4*c);
+    P.leg1.position.set(B.leg1[0],B.leg1[1]+3*c,B.leg1[2]-4*c);
+    P.head.position.set(B.head[0],B.head[1]-c,B.head[2]);
+    P.body.rotation.set(.5*c,0,0);
+    if(p>0){
+      const by=Math.sin(Math.sqrt(p)*Math.PI*2)*.2;
+      P.body.rotation.y=-by;
+      P.arm0.position.set(-Math.cos(by)*5,B.arm0[1],-Math.sin(by)*5);
+      P.arm1.position.set(Math.cos(by)*5,B.arm1[1],Math.sin(by)*5);
+      const f=Math.pow(1-p,4);
+      P.arm0.rotation.x-=Math.sin(f*Math.PI)*1.2+Math.sin(p*Math.PI)*.525;
+      P.arm0.rotation.y=-by*2;
+      P.arm0.rotation.z=Math.sin(p*Math.PI)*.4;
+      P.arm1.rotation.y=-by;
+    }
+    inner.position.y=baseY-3*c*fit/16;
+  }
+  return {holder,mats:[base,over],pose,dispose(){geos.forEach(g=>g.dispose());base.dispose();over.dispose();tex.dispose()}};
 }
 
 // the whole "Skins in this pack" section. fetches the pck, builds the carousel when everything is ready
@@ -690,11 +793,14 @@ function startCarousel(box,p,skins){
   const camera=new T.PerspectiveCamera(28,1,.1,50);
   camera.position.set(0,.1,7.2);camera.lookAt(0,0,0);
 
-  const models=skins.map(s=>{const m=makeSkinModel(s.img,s.slim);scene.add(m.holder);return m});
+  const models=skins.map(s=>{const m=makeSkinModel(s.img,s.slim,s);m.c=0;m.r=0;scene.add(m.holder);m.pose(0,0,0,0);return m});
   const cyc=N>=3;   // wraps around when there are enough skins
   const maxVis=cyc?Math.min(2,Math.floor((N-1)/2)):Math.min(2,N-1);
   const still=window.matchMedia&&matchMedia('(prefers-reduced-motion: reduce)').matches;
   let pos=0,target=0,spacing=1.4,spin=0,raf=0,last=performance.now(),dead=false;
+  // the middle skin plays the same three previews as the game menu, one after the other
+  const CYCLE=[['crouch',1.8],['hit',1.8],['run',2.4]],CYC_LEN=6;
+  let clock=0;
 
   function label(){
     const i=((target%N)+N)%N;
@@ -721,6 +827,9 @@ function startCarousel(box,p,skins){
     if(document.hidden)return;
     pos+=(target-pos)*Math.min(1,dt*9);
     spin+=dt;
+    if(!still)clock+=dt;
+    let an='',at=clock%CYC_LEN;
+    for(const [n,d] of CYCLE){if(at<d){an=n;break}at-=d}
     models.forEach((m,i)=>{
       let d=i-pos;
       if(cyc)d=((d+N/2)%N+N)%N-N/2;   // shortest way around
@@ -733,6 +842,10 @@ function startCarousel(box,p,skins){
       const turnIn=-Math.sign(d)*Math.min(a,1)*.5;                // side ones face the middle a bit
       const sway=still?0:Math.sin(spin*.8)*.45*Math.max(0,1-a);   // the middle one slowly turns
       m.holder.rotation.y=turnIn+sway;
+      const mid=!still&&a<.5,k=Math.min(1,dt*8);
+      m.c+=((mid&&an==='crouch'?1:0)-m.c)*k;
+      m.r+=((mid&&an==='run'?1:0)-m.r)*k;
+      m.pose(spin,m.c,m.r,mid&&an==='hit'?(at/.9)%1:0);
       const b=1-.4*Math.min(a,1.5)/1.5;
       m.mats.forEach(mt=>mt.color.setScalar(b));
     });
