@@ -10,6 +10,7 @@ const LIMITS = {
   anonTotal: 10 * 1024 * 1024, // anon upload whole thing max
   bigFile: 150 * 1024 * 1024,  // one pack file sent in pieces (logged in only)
   bigTotal: 300 * 1024 * 1024, // a whole pack that has big files
+  skins: 3 * 1024 * 1024,      // the optional skins.pck used for the 3d preview
   bigOpen: 6,                  // unfinished big uploads one person can have at once
   bigOpenBytes: 2 * 1024 * 1024 * 1024, // unfinished big uploads site wide (keeps junk from filling R2)
   anonPerDay: 2,           // anon uploads per visitor per day
@@ -88,6 +89,17 @@ function niceSize(b) {
   if (b < 1024) return b + " B";
   if (b < 1024 * 1024) return Math.round(b / 1024) + " KB";
   return (b / 1048576).toFixed(1) + " MB";
+}
+
+// quick check that a file starts like an lce .pck (version 1-10, small name list), either byte order
+function looksLikePck(buf) {
+  if (buf.byteLength < 16) return false;
+  const dv = new DataView(buf);
+  for (const le of [false, true]) {
+    const ver = dv.getUint32(0, le), n = dv.getUint32(4, le);
+    if (ver >= 1 && ver <= 10 && n < 500) return true;
+  }
+  return false;
 }
 
 function isFile(v) {
@@ -848,6 +860,7 @@ function packView(r) {
     date: new Date(r.created_at * 1000).toISOString().slice(0, 10),
     tags: JSON.parse(r.tags || "[]"),
     description: r.description,
+    hasSkins: !!r.has_skins,   // true if there is a skins.pck for the 3d carousel
     type: r.type === "texture" ? "texture" : "skin",   // old packs have no type, they are skins
     downloads: r.downloads || 0,
     likes: r.like_count || 0,
@@ -891,14 +904,14 @@ async function myPacks(request, env) {
   const s = await readSession(env, request);
   if (!s) return json({ error: "Please log in first." }, 401);
   const { results } = await env.DB.prepare(
-    "SELECT id, name, description, tags, images, files, status, deny_reason, created_at FROM packs WHERE creator_id = ? ORDER BY created_at DESC LIMIT 50"
+    "SELECT id, name, description, tags, images, files, status, deny_reason, created_at, type, has_skins FROM packs WHERE creator_id = ? ORDER BY created_at DESC LIMIT 50"
   ).bind(s.id).all();
   return json(results.map((r) => {
     let tags = [], images = [], files = [];
     try { tags = JSON.parse(r.tags || "[]"); } catch {}
     try { images = JSON.parse(r.images || "[]"); } catch {}
     try { files = JSON.parse(r.files || "[]"); } catch {}
-    return { ...r, tags, images, files };
+    return { ...r, tags, images, files, hasSkins: !!r.has_skins, type: r.type === "texture" ? "texture" : "skin" };
   }));
 }
 
@@ -933,10 +946,10 @@ async function editMine(request, env, ctx) {
   // normal people can only edit their own packs, mods can edit any pack
   const row = s.mod
     ? await env.DB.prepare(
-        "SELECT id, creator_id, status, images, files FROM packs WHERE id = ?"
+        "SELECT id, creator_id, status, images, files, has_skins FROM packs WHERE id = ?"
       ).bind(id).first()
     : await env.DB.prepare(
-        "SELECT id, creator_id, status, images, files FROM packs WHERE id = ? AND creator_id = ?"
+        "SELECT id, creator_id, status, images, files, has_skins FROM packs WHERE id = ? AND creator_id = ?"
       ).bind(id, s.id).first();
   if (!row) return json({ error: "Pack not found." }, 404);
 
@@ -986,6 +999,22 @@ async function editMine(request, env, ctx) {
       sizes.delete(key);
       mediaChanged = true;
     }
+  }
+  // skins.pck for the 3d carousel: adding or replacing it counts like a screenshot change
+  let hasSkinsNew = row.has_skins ? 1 : 0;
+  const skinsFile = form.get("skins");
+  if (isFile(skinsFile)) {
+    if (skinsFile.size > LIMITS.skins) return json({ error: "The skins preview file is too big (max 3 MB)." }, 400);
+    const buf = await skinsFile.arrayBuffer();
+    if (!looksLikePck(buf)) return json({ error: "That does not look like a skins.pck file." }, 400);
+    puts.push({ key: `${id}/skins`, file: new Blob([buf]), type: "application/octet-stream" });
+    sizes.set(`${id}/skins`, skinsFile.size);
+    hasSkinsNew = 1;
+    mediaChanged = true;
+  } else if (form.get("remove_skins") === "1" && hasSkinsNew) {
+    hasSkinsNew = 0;
+    removes.push(`${id}/skins`);
+    sizes.delete(`${id}/skins`);
   }
   newImages.sort();
 
@@ -1056,9 +1085,9 @@ async function editMine(request, env, ctx) {
       done.push(u.key);
     }
     await env.DB.prepare(
-      "UPDATE packs SET name = ?, description = ?, tags = ?, images = ?, files = ? WHERE id = ? AND creator_id = ?"
+      "UPDATE packs SET name = ?, description = ?, tags = ?, images = ?, files = ?, has_skins = ? WHERE id = ? AND creator_id = ?"
     ).bind(
-      name, description, JSON.stringify(tags), JSON.stringify(newImages), JSON.stringify(newFiles), id, row.creator_id
+      name, description, JSON.stringify(tags), JSON.stringify(newImages), JSON.stringify(newFiles), hasSkinsNew, id, row.creator_id
     ).run();
   } catch (e) {
     await Promise.allSettled(done.filter((k) => !existing.has(k)).map((k) => env.FILES.delete(k)));
@@ -1281,6 +1310,18 @@ async function submit(request, env, ctx) {
     total += f.size;
   }
 
+  // optional skins.pck so the pack page can show a 3d skin carousel
+  let hasSkins = 0;
+  const skinsFile = form.get("skins");
+  if (isFile(skinsFile)) {
+    if (skinsFile.size > LIMITS.skins) return json({ error: "The skins preview file is too big (max 3 MB)." }, 400);
+    const buf = await skinsFile.arrayBuffer();
+    if (!looksLikePck(buf)) return json({ error: "That does not look like a skins.pck file." }, 400);
+    uploads.push({ key: `${id}/skins`, file: new Blob([buf]), type: "application/octet-stream" });
+    total += skinsFile.size;
+    hasSkins = 1;
+  }
+
   const files = [];
   for (const pkey of Object.keys(PLATFORMS)) {
     const bigRow = bigFiles.get(pkey);
@@ -1316,11 +1357,11 @@ async function submit(request, env, ctx) {
     }
     await env.DB.prepare(
       `INSERT INTO packs
-       (id, slug, name, description, tags, creator_id, creator_name, status, icon_key, images, files, created_at, ip_hash, type)
-       VALUES (?, ?, ?, ?, ?, ?, ?, 'pending', 'icon', ?, ?, ?, ?, ?)`
+       (id, slug, name, description, tags, creator_id, creator_name, status, icon_key, images, files, created_at, ip_hash, type, has_skins)
+       VALUES (?, ?, ?, ?, ?, ?, ?, 'pending', 'icon', ?, ?, ?, ?, ?, ?)`
     ).bind(
       id, slug, name, description, JSON.stringify(tags), s.id, clean(s.name, 60),
-      JSON.stringify(images), JSON.stringify(files), Math.floor(Date.now() / 1000), visitor, packType
+      JSON.stringify(images), JSON.stringify(files), Math.floor(Date.now() / 1000), visitor, packType, hasSkins
     ).run();
     // the big files now belong to a real pack
     if (bigFiles.size) {
@@ -1544,8 +1585,12 @@ async function serveFile(request, env, url, ctx) {
   const b = parts[4] || "";
   if (!/^[a-f0-9]{12}$/.test(id)) return notFound();
 
-  let key, isImage;
-  if (parts.length === 4 && /^(icon|shot[1-4])$/.test(a)) {
+  let key, isImage, isSkins = false;
+  if (parts.length === 4 && a === "skins") {
+    key = `${id}/skins`;     // the skins.pck for the 3d preview, read by the page itself
+    isImage = false;
+    isSkins = true;
+  } else if (parts.length === 4 && /^(icon|shot[1-4])$/.test(a)) {
     key = `${id}/${a}`;
     isImage = true;
   } else if (parts.length === 5 && /^[a-z0-9]{3,10}$/.test(a) && /^[A-Za-z0-9._-]{1,80}$/.test(b)) {
@@ -1582,13 +1627,15 @@ async function serveFile(request, env, url, ctx) {
       "Content-Type",
       ["image/png", "image/jpeg", "image/webp"].includes(t) ? t : "application/octet-stream"
     );
+  } else if (isSkins) {
+    headers.set("Content-Type", "application/octet-stream");
   } else {
     headers.set("Content-Type", "application/octet-stream");
     headers.set("Content-Disposition", `attachment; filename="${b}"`);
   }
   // plain download count: every pack file download on an approved pack adds 1
   // (images dont count, and neither do resumed/partial downloads)
-  if (!isImage && row.status === "approved" && !request.headers.get("Range")) {
+  if (!isImage && !isSkins && row.status === "approved" && !request.headers.get("Range")) {
     ctx.waitUntil(
       env.DB.prepare("UPDATE packs SET downloads = downloads + 1 WHERE id = ?").bind(id).run().catch(() => {})
     );
@@ -2097,7 +2144,7 @@ async function purgeDenied(env) {
         if (page.objects.length) await env.FILES.delete(page.objects.map((o) => o.key));
         cursor = page.truncated ? page.cursor : undefined;
       } while (cursor);
-      await env.DB.prepare("UPDATE packs SET files = '[]', images = '[]' WHERE id = ?").bind(r.id).run();
+      await env.DB.prepare("UPDATE packs SET files = '[]', images = '[]', has_skins = 0 WHERE id = ?").bind(r.id).run();
     }
   } catch {}
 }
