@@ -1383,6 +1383,10 @@ const CONSOLES=[
   {id:'xboxone',name:'Xbox One',le:true,keepFolders:false},
   {id:'switch',name:'Nintendo Switch',le:true,keepFolders:false}
 ];
+// the property name table and language list in a pack made by PCK Studio (checked against one).
+// packs written here use the same table with the same numbers, a table with only the used names crashed a console
+const CANON=['DISPLAYNAME','THEMENAME','FREE','CREDIT','BOX','ANIM','CAPEPATH','GAME_FLAGS','PACKID','DISPLAYNAMEID','THEMENAMEID','OFFSET','LOCK'];
+const LANGS=['cs-CZ','da-DK','de-DE','el-GR','en-EN','en-GB','es-ES','es-MX','fi-FI','fr-FR','it-IT','ja-JP','ko-KR','nb-NO','nl-NL','pl-PL','pt-BR','pt-PT','ru-RU','sk-SK','sv-SE','tr-TR','zh-CN','zh-HANS','zh-HANT'];
 const T={SKIN:0,CAPE:1,INFO:4,TPINFO:5,LOC:6,GRF:7,AUDIO:8,SKINDATA:11};
 const te=new TextEncoder(),td=new TextDecoder();
 function cat(parts){let n=0;parts.forEach(p=>n+=p.length);const o=new Uint8Array(n);let q=0;parts.forEach(p=>{o.set(p,q);q+=p.length});return o}
@@ -1484,7 +1488,7 @@ function locWrite(L){
 function convert(m,c,rep,label){
   label=label||'';
   const strip=!c.keepFolders&&!m.files.some(f=>f.type===T.TPINFO||f.type===T.GRF);
-  const out={type:m.type,names:m.names.map(n=>n.slice()),xml:m.xml,le:c.le,files:[]};
+  const out={type:m.type,names:m.xml==null?CANON.map((k,i)=>[i,k]):m.names.map(n=>n.slice()),xml:m.xml,le:c.le,files:[]};
   const used=new Set(m.files.filter(f=>!/[\\/]/.test(f.name)).map(f=>f.name.toLowerCase()));
   const dropped={},renamed={};
   for(const f of m.files){
@@ -1536,7 +1540,7 @@ function zip(entries){
 }
 
 /* ----- the page ----- */
-const st={m:null,loc:null,locFile:null,locOk:false,fresh:false,name:'',fname:'',urls:[],msg:null,reps:null,consoleId:'xbox360',newName:''};
+const st={repaired:false,m:null,loc:null,locFile:null,locOk:false,fresh:false,name:'',fname:'',urls:[],msg:null,reps:null,consoleId:'xbox360',newName:''};
 const get=(f,k)=>{const p=f.props.find(x=>x[0]===k);return p?p[1]:null};
 const set=(f,k,v)=>{const p=f.props.find(x=>x[0]===k);if(p)p[1]=String(v);else f.props.push([k,String(v)])};
 const del=(f,k)=>{f.props=f.props.filter(x=>x[0]!==k)};
@@ -1578,11 +1582,13 @@ function setText(f,prop,idProp,suffix,val){
   if(k)locSet(k,val);
 }
 
+// every language gets the same text and the header number is 2, like the PCK Studio pack
+const allLangs=vals=>LANGS.map(l=>({tn:l,a:2,b:0,bid:l,vals:vals.slice()}));
 function newPack(name){
   const id=8000+Math.floor(Math.random()*(0xffffff-8000));
-  const loc={uniq:0,keys:['IDS_DISPLAY_NAME'],langs:[{tn:'en-EN',a:0,b:0,bid:'en-EN',vals:[name]}]};
+  const loc={uniq:0,keys:['IDS_DISPLAY_NAME'],langs:allLangs([name])};
   const locFile={name:'localisation.loc',type:T.LOC,props:[],data:locWrite(loc)};
-  st.m={le:false,type:3,names:[],xml:null,files:[{name:'0',type:T.INFO,props:[['PACKID',String(id)],['PACKVERSION','0']],data:new Uint8Array(0)},locFile]};
+  st.m={le:false,type:3,names:CANON.map((k,i)=>[i,k]),xml:null,files:[{name:'0',type:T.INFO,props:[['PACKID',String(id)]],data:new Uint8Array(0)},locFile]};
   st.loc=loc;st.locFile=locFile;st.locOk=true;st.fresh=true;st.name=name;st.fname='';st.reps=null;
 }
 function loadPack(u8,fname){
@@ -1590,7 +1596,19 @@ function loadPack(u8,fname){
   if(!m)return false;
   st.m=m;st.fresh=false;st.fname=fname;st.reps=null;st.loc=null;st.locOk=false;
   st.locFile=m.files.find(f=>f.type===T.LOC)||null;
-  if(st.locFile){try{const L=locParse(st.locFile.data);if(same(locWrite(L),st.locFile.data)){st.loc=L;st.locOk=true}}catch(e){}}
+  st.repaired=false;
+  if(st.locFile){try{
+    const L=locParse(st.locFile.data);
+    if(same(locWrite(L),st.locFile.data)){
+      st.loc=L;st.locOk=true;
+      // a loc from the first version of this tool (header 0, one language) crashed a console: give it what a PCK Studio one has
+      if(L.langs.length&&L.langs.every(l=>l.a===0)){
+        const first=L.langs.find(l=>l.tn==='en-EN')||L.langs[0];
+        L.langs=allLangs(first.vals);locSync();st.repaired=true;
+        const inf=m.files.find(f=>f.type===T.INFO&&f.name==='0');if(inf&&get(inf,'PACKVERSION')==='0')del(inf,'PACKVERSION');
+      }
+    }
+  }catch(e){}}
   st.name=locGet('IDS_DISPLAY_NAME')||fname.replace(/\.pck$/i,'')||'skinpack';
   return true;
 }
@@ -1614,6 +1632,7 @@ function removeSkin(f){
   const c=capeOf(f);
   if(c&&!skins().some(s=>s!==f&&capeOf(s)===c))st.m.files=st.m.files.filter(x=>x!==c);
   ['DISPLAYNAMEID','THEMENAMEID'].forEach(p=>{const k=get(f,p);if(k)locDel(k)});
+  if(skinId(f))locDel('IDS_dlcskin'+skinId(f)+'_THEMENAME');
   st.m.files=st.m.files.filter(x=>x!==f);
 }
 function moveSkin(f,dir){
@@ -1642,7 +1661,7 @@ function draw(){
   const openFile=async f=>{
     if(f.size>60*1024*1024){st.msg=['err','That file is over 60 MB.'];return draw()}
     const ok=loadPack(new Uint8Array(await f.arrayBuffer()),f.name);
-    st.msg=ok?['ok','Opened '+f.name+'.']:['err',f.name+' does not look like a .pck file.'];draw();
+    st.msg=ok?['ok','Opened '+f.name+'.'+(st.repaired?' Its localisation file was rebuilt with all 25 languages.':'')]:['err',f.name+' does not look like a .pck file.'];draw();
   };
   fileIn.addEventListener('change',()=>{if(fileIn.files[0])openFile(fileIn.files[0])});
   const nn=el('input',{type:'text',maxlength:'40',placeholder:'Name for a new pack','aria-label':'Name for a new pack'});nn.value=st.newName;
@@ -1679,7 +1698,7 @@ function draw(){
   }
   if(st.m.files.some(f=>f.type===T.TPINFO||f.type===T.GRF))
     root.append(el('p',{class:'callout',text:'This looks like a texture or mash-up pack. You can still convert it, but its folders are kept because they are part of the pack.'}));
-  if(st.fresh)root.append(el('p',{class:'hint',text:'New packs get a basic localisation file (pack name and skin names). It is written from the format notes and has not been tested on a console yet.'}));
+  if(st.fresh)root.append(el('p',{class:'hint',text:'New packs copy the layout of a pack PCK Studio made (same property table, all 25 languages). It has not been tested on a console yet.'}));
   else if(!st.locFile)root.append(el('p',{class:'hint',text:'This pack has no localisation file, so names are stored on the skins only.'}));
   else if(!st.locOk)root.append(el('p',{class:'hint',text:'This pack\u2019s localisation file is not one I can edit safely, so I leave it alone. Names you change are saved on the skins, but the game may keep showing the old ones.'}));
 
@@ -1750,7 +1769,12 @@ function skinCard(f,i,count){
   const nm=el('input',{type:'text',maxlength:'40','aria-label':'Skin name'});nm.value=get(f,'DISPLAYNAME')||'';
   nm.addEventListener('change',()=>{const v=nm.value.trim().slice(0,40)||'Skin';nm.value=v;setText(f,'DISPLAYNAME','DISPLAYNAMEID','DISPLAYNAME',v)});
   const th=el('input',{type:'text',maxlength:'40','aria-label':'Theme name',placeholder:'Theme (optional)'});th.value=get(f,'THEMENAME')||'';
-  th.addEventListener('change',()=>{const v=th.value.trim().slice(0,40);th.value=v;setText(f,'THEMENAME','THEMENAMEID','THEMENAME',v)});
+  th.addEventListener('change',()=>{
+    const v=th.value.trim().slice(0,40);th.value=v;
+    const k='IDS_dlcskin'+skinId(f)+'_THEMENAME',idk=get(f,'THEMENAMEID')||k;
+    if(!v){del(f,'THEMENAME');del(f,'THEMENAMEID');locDel(idk);return}
+    set(f,'THEMENAME',v);if(skinId(f)||get(f,'THEMENAMEID'))locSet(idk,v);
+  });
   const a=parseInt(get(f,'ANIM')||'0')>>>0;
   const ms=el('select',{'aria-label':'Model'});
   [['classic','Classic arms (64x32)'],['wide','Wide arms (64x64)'],['slim','Slim arms (64x64)']].forEach(o=>ms.append(el('option',{value:o[0],text:o[1]})));
@@ -1780,7 +1804,7 @@ function skinCard(f,i,count){
       el('p',{class:'hint pmgap',text:'Skin '+(i+1)+' of '+count+(cape?', has a cape':'')}),row));
 }
 
-return {show:draw,pckParse,pckWrite,locParse,locWrite,convert,zip,CONSOLES};
+return {show:draw,pckParse,pckWrite,locParse,locWrite,convert,zip,CONSOLES,CANON,LANGS,newPack,st,loadPack,makeSkin};
 })();
 function showPackMaker(){PM.show()}
 
