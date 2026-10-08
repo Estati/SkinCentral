@@ -244,7 +244,7 @@ footer{margin-top:8px;font-size:var(--t);color:#cfc8bf;text-shadow:2px 2px 0 #00
       <button class="btn" type="button" id="tab-texture" aria-pressed="false">Texture packs</button>
     </div>
     <button class="btn" id="refresh" type="button">Refresh</button>
-    <input type="search" id="q" placeholder="Search packs or platforms" aria-label="Search packs">
+    <input type="search" id="q" name="pack-search" autocomplete="off" autocapitalize="off" spellcheck="false" data-lpignore="true" data-1p-ignore readonly onfocus="this.removeAttribute('readonly')" placeholder="Search packs or platforms" aria-label="Search packs">
     <div class="grid" id="grid"></div>
   </section>
   <section class="panel" id="detail" hidden></section>
@@ -577,9 +577,13 @@ function pckSkins(files){
     if(f.type!==11)continue;
     try{const sub=readPck(f.data.buffer.slice(f.data.byteOffset,f.data.byteOffset+f.data.byteLength));if(sub)all=all.concat(sub)}catch(e){}
   }
+  // capes are type 1 files, a skin points at its cape with CAPEPATH (matched by file name, folders do not matter)
+  const capeMap={};
+  all.forEach(f=>{if(f.type===1)capeMap[f.name.split(/[\\/]/).pop().toLowerCase()]=f.data});
   return all.filter(f=>f.type===0&&/\.png$/i.test(f.name)).slice(0,100).map(f=>{
+    const cp=f.props.CAPEPATH;
     const anim=parseInt(f.props.ANIM||'0')||0;
-    return {name:(f.props.DISPLAYNAME||'Skin').slice(0,40),theme:(f.props.THEMENAME||'').slice(0,40),slim:!!(anim&SLIM_FLAG),anim,boxes:parseBoxes(f.multi&&f.multi.BOX),png:f.data};
+    return {name:(f.props.DISPLAYNAME||'Skin').slice(0,40),theme:(f.props.THEMENAME||'').slice(0,40),slim:!!(anim&SLIM_FLAG),anim,boxes:parseBoxes(f.multi&&f.multi.BOX),png:f.data,cape:cp?(capeMap[cp.split(/[\\/]/).pop().toLowerCase()]||null):null};
   });
 }
 // shows what we found right under the file picker (upload form and edit form)
@@ -610,12 +614,12 @@ function loadThree(){
   });
   return threeP;
 }
-function loadSkinImage(bytes){
+function loadSkinImage(bytes,isCape){
   return new Promise(res=>{
     const url=URL.createObjectURL(new Blob([bytes],{type:'image/png'}));
     const im=new Image();
     // only normal skin sizes: 64x64 or the old 64x32
-    im.onload=()=>{URL.revokeObjectURL(url);res(im.width===64&&(im.height===64||im.height===32)?im:null)};
+    im.onload=()=>{URL.revokeObjectURL(url);res(isCape?(im.width===64&&im.height===32?im:null):(im.width===64&&(im.height===64||im.height===32)?im:null))};
     im.onerror=()=>{URL.revokeObjectURL(url);res(null)};
     im.src=url;
   });
@@ -721,6 +725,21 @@ function makeSkinModel(img,slim,skin){
     }
     parts[name]=g;inner.add(g);
   }
+  // cape: a 10x16x1 box hanging off the back of the body, texture at 0,0 of the 64x32 cape png.
+  // the box is turned around so the front of the cape texture faces away from the player
+  let capePivot=null,capeMat=null,capeTex=null,capeGeo=null;
+  if(skin&&skin.capeImg){
+    capeTex=new T.Texture(skin.capeImg);
+    capeTex.magFilter=T.NearestFilter;capeTex.minFilter=T.NearestFilter;capeTex.generateMipmaps=false;capeTex.needsUpdate=true;
+    capeMat=new T.MeshLambertMaterial({map:capeTex,alphaTest:.5,side:T.DoubleSide});
+    capeGeo=new T.BoxGeometry(10,16,1);
+    setBoxUV(capeGeo,64,32,10,16,1,0,0,false);
+    const mesh=new T.Mesh(capeGeo,capeMat);
+    mesh.position.set(0,-8,.5);
+    const turned=new T.Group();turned.rotation.y=Math.PI;turned.add(mesh);
+    capePivot=new T.Group();capePivot.position.set(0,0,-2);capePivot.add(turned);
+    parts.body.add(capePivot);
+  }
   // big custom models (a whole plane) get shrunk to fit and centered, normal skins stay as they are
   let fit=1,cx=0,cy=0,cz=0;
   if(custom.length&&hi[0]>lo[0]){
@@ -749,6 +768,7 @@ function makeSkinModel(img,slim,skin){
     P.leg1.position.set(B.leg1[0],B.leg1[1]+3*c,B.leg1[2]-4*c);
     P.head.position.set(B.head[0],B.head[1]-c,B.head[2]);
     P.body.rotation.set(.5*c,0,0);
+    if(capePivot)capePivot.rotation.x=.1+.55*r*(.6+.4*Math.abs(Math.cos(t*9)))+.2*c;
     if(p>0){
       const by=Math.sin(Math.sqrt(p)*Math.PI*2)*.2;
       P.body.rotation.y=-by;
@@ -762,7 +782,7 @@ function makeSkinModel(img,slim,skin){
     }
     inner.position.y=baseY-3*c*fit/16;
   }
-  return {holder,mats:[base,over],pose,dispose(){geos.forEach(g=>g.dispose());base.dispose();over.dispose();tex.dispose()}};
+  return {holder,mats:capeMat?[base,over,capeMat]:[base,over],pose,dispose(){geos.forEach(g=>g.dispose());base.dispose();over.dispose();tex.dispose();if(capeMat){capeGeo.dispose();capeMat.dispose();capeTex.dispose()}}};
 }
 
 // the whole "Skins in this pack" section. fetches the pck, builds the carousel when everything is ready
@@ -775,8 +795,8 @@ function skinCarousel(p){
       const files=readPck(buf);
       const found=files?pckSkins(files):[];
       if(!found.length)throw new Error('no skins');
-      return Promise.all([loadThree(),Promise.all(found.map(s=>loadSkinImage(s.png)))]).then(([,imgs])=>{
-        const skins=found.map((s,i)=>({...s,img:imgs[i]})).filter(s=>s.img);
+      return Promise.all([loadThree(),Promise.all(found.map(s=>loadSkinImage(s.png))),Promise.all(found.map(s=>s.cape?loadSkinImage(s.cape,true):null))]).then(([,imgs,caps])=>{
+        const skins=found.map((s,i)=>({...s,img:imgs[i],capeImg:caps[i]})).filter(s=>s.img);
         if(!skins.length)throw new Error('no usable skins');
         return skins;
       });
@@ -899,7 +919,7 @@ function startCarousel(box,p,skins){
     if(e.key==='ArrowLeft'){e.preventDefault();go(-1)}
     else if(e.key==='ArrowRight'){e.preventDefault();go(1)}
   });
-  // drag on the picture to spin the middle skin all the way around (left/right = turn, up/down = tilt)
+  // drag on the picture to spin the middle skin all the way around (left/right only)
   // the arrow buttons and arrow keys still flip between skins
   let drag=null;
   const centre=()=>models[((target%N)+N)%N];
@@ -912,7 +932,6 @@ function startCarousel(box,p,skins){
     if(!drag)return;
     const m=centre();
     m.ry+=(e.clientX-drag.x)*.01;
-    m.rx+=(e.clientY-drag.y)*.01;
     drag.x=e.clientX;drag.y=e.clientY;
   });
   const endDrag=()=>{drag=null;canvas.style.cursor=''};
