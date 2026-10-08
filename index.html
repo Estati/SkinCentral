@@ -202,6 +202,19 @@ input[type=checkbox]{width:16px;height:16px;margin:0 8px 0 0;vertical-align:midd
 .doc h3{font-size:var(--b);margin:20px 0 8px}
 .doc p{max-width:60ch;margin:0 0 8px}
 .doc .callout{max-width:none}
+/* pack maker */
+.pmdrop{border:4px dashed #555;padding:16px;text-align:center;margin:0 0 16px;color:#555}
+.pmdrop.over{background:#a0a4d8;color:#fff}
+.pmskins{display:grid;gap:12px;margin-top:12px}
+#packmaker .skin{flex-direction:row;flex-wrap:wrap;align-items:flex-start;text-align:left}
+#packmaker .skin img{flex:none;width:128px;image-rendering:pixelated;background:#000;border:3px solid #6d6d6d}
+#packmaker .skin .f{flex:1 1 240px;min-width:0}
+#packmaker .skin .f input,#packmaker .skin .f select{margin-top:8px}
+#packmaker .skin .f label{margin:0 0 8px}
+#packmaker .skin .dl .btn{font-size:var(--t);padding:4px 10px}
+#packmaker .dl+label,#packmaker select+.hint{margin-top:16px}
+.pmgap{margin-top:12px}
+.pmrep p{overflow-wrap:anywhere}
 footer a{color:var(--gold)}
 footer{margin-top:8px;font-size:var(--t);color:#cfc8bf;text-shadow:2px 2px 0 #000}
 @media (prefers-reduced-motion:reduce){.splash{animation:none}}
@@ -239,6 +252,7 @@ footer{margin-top:8px;font-size:var(--t);color:#cfc8bf;text-shadow:2px 2px 0 #00
   <section class="panel" id="admin" hidden></section>
   <section class="panel doc" id="rules" hidden></section>
   <section class="panel doc" id="tutorials" hidden></section>
+  <section class="panel doc" id="packmaker" hidden></section>
   <section class="panel doc" id="account" hidden></section>
   <section class="panel" id="profile" hidden></section>
   <section class="panel doc" id="owner" hidden></section>
@@ -1339,6 +1353,9 @@ const TUTORIALS=[
 function showTutorials(){
   const t=$('tutorials');t.textContent='';document.title='Tools | Skin Central';
   t.append(el('h2',{text:'Tools'}),
+    el('h3',{text:'Pack Maker'}),
+    el('p',{class:'hint',text:'Make a skin pack, edit one, and export it for each console. It runs in your browser.'}),
+    el('div',{class:'dl'},el('a',{class:'btn',href:'#/packmaker',text:'Open Pack Maker'})),
     el('h3',{text:'Tutorials'}),
     el('p',{class:'hint',text:'Video guides on YouTube. They open in a new tab.'}));
   const g=el('div',{class:'dl'});
@@ -1348,6 +1365,424 @@ function showTutorials(){
     el('p',{class:'hint',text:'A community-made tool for editing Legacy Console Edition pack files. It is made by its own authors, not by Skin Central. The download opens in a new tab.'}),
     el('div',{class:'dl'},el('a',{class:'btn',href:'https://gamebanana.com/dl/985300',target:'_blank',rel:'noopener noreferrer',text:'Download PCK Studio'})));
 }
+
+/* ---------- pack maker (#/packmaker) ----------
+   makes, edits and converts skin pack .pck files in the browser, nothing is uploaded.
+   file layout is the same one readPck() above reads: version, list of property names, file table,
+   then every file's properties + data. xbox 360, ps3 and wii u are big endian, the other consoles
+   little endian (same guess as readPck). file types used: 0 skin, 1 cape, 4 info ("0"), 5 texture pack info,
+   6 localisation, 7 game rules, 8 audio, 11 skins.pck (a pck inside the pck) */
+const PM=(()=>{
+// keepFolders: true would leave folders alone for that console. they are all removed for now, change it here if a console turns out to need them
+const CONSOLES=[
+  {id:'xbox360',name:'Xbox 360',le:false,keepFolders:false},
+  {id:'ps3',name:'PlayStation 3',le:false,keepFolders:false},
+  {id:'wiiu',name:'Wii U',le:false,keepFolders:false},
+  {id:'vita',name:'PS Vita',le:true,keepFolders:false},
+  {id:'ps4',name:'PlayStation 4',le:true,keepFolders:false},
+  {id:'xboxone',name:'Xbox One',le:true,keepFolders:false},
+  {id:'switch',name:'Nintendo Switch',le:true,keepFolders:false}
+];
+const T={SKIN:0,CAPE:1,INFO:4,TPINFO:5,LOC:6,GRF:7,AUDIO:8,SKINDATA:11};
+const te=new TextEncoder(),td=new TextDecoder();
+function cat(parts){let n=0;parts.forEach(p=>n+=p.length);const o=new Uint8Array(n);let q=0;parts.forEach(p=>{o.set(p,q);q+=p.length});return o}
+const same=(a,b)=>a.length===b.length&&a.every((v,i)=>v===b[i]);
+const base=n=>n.split(/[\\/]/).pop();
+
+/* ----- pck reading and writing ----- */
+function pckParse(buf){
+  const u=buf instanceof Uint8Array?buf:new Uint8Array(buf);
+  for(const le of [false,true]){try{return parseAs(u,le)}catch(e){}}
+  return null;
+}
+function parseAs(u,le){
+  const dv=new DataView(u.buffer,u.byteOffset,u.byteLength),len=u.length;let p=0;
+  const fail=()=>{throw new Error('bad pck')};
+  const i32=()=>{if(p+4>len)fail();const v=dv.getUint32(p,le);p+=4;return v};
+  const str=n=>{if(n>5000||p+n*2>len)fail();let s='';for(let i=0;i<n;i++){s+=String.fromCharCode(dv.getUint16(p,le));p+=2}return s};
+  const type=i32();if(type<1||type>10)fail();
+  const nn=i32();if(nn>500)fail();
+  const names=[];
+  for(let i=0;i<nn;i++){const idx=i32(),ln=i32();names.push([idx,str(ln)]);i32()}
+  let xml=null;
+  if(names.some(n=>n[1]==='XMLVERSION'))xml=i32();
+  const nf=i32();if(nf>5000)fail();
+  const files=[];
+  for(let i=0;i<nf;i++){const size=i32(),ft=i32(),ln=i32();const name=str(ln);i32();files.push({size,type:ft,name,props:[],data:null})}
+  for(const f of files){
+    const pc=i32();if(pc>500)fail();
+    for(let i=0;i<pc;i++){const k=i32(),ln=i32();const v=str(ln);i32();const kn=names.find(n=>n[0]===k);f.props.push([kn?kn[1]:String(k),v])}
+    if(p+f.size>len)fail();
+    f.data=u.slice(p,p+f.size);p+=f.size;delete f.size;
+  }
+  return {le,type,names,xml,files};
+}
+function pckWrite(m,le){
+  const parts=[];
+  const i32=v=>{const b=new Uint8Array(4);new DataView(b.buffer).setUint32(0,v>>>0,le);parts.push(b)};
+  const str=s=>{i32(s.length);const b=new Uint8Array(s.length*2),d=new DataView(b.buffer);for(let i=0;i<s.length;i++)d.setUint16(i*2,s.charCodeAt(i),le);parts.push(b);i32(0)};
+  const names=m.names.map(n=>n.slice());
+  const has=k=>names.some(n=>n[1]===k);
+  let next=names.reduce((a,n)=>Math.max(a,n[0]+1),0);
+  const add=k=>{if(!has(k))names.push([next++,k])};
+  if(m.xml!=null)add('XMLVERSION');
+  m.files.forEach(f=>f.props.forEach(p=>add(p[0])));
+  const idx=k=>names.find(n=>n[1]===k)[0];
+  i32(m.type);i32(names.length);names.forEach(n=>{i32(n[0]);str(n[1])});
+  if(has('XMLVERSION'))i32(m.xml||0);
+  i32(m.files.length);
+  m.files.forEach(f=>{i32(f.data.length);i32(f.type);str(f.name)});
+  m.files.forEach(f=>{i32(f.props.length);f.props.forEach(p=>{i32(idx(p[0]));str(p[1])});parts.push(f.data)});
+  return cat(parts);
+}
+
+/* ----- localisation.loc (pack name + skin names). always big endian, strings are 2 byte length + utf8.
+   written from the community docs, so a file is only edited if parsing it and writing it back gives
+   exactly the same bytes (checked when a pack is opened). ----- */
+function locParse(u){
+  const dv=new DataView(u.buffer,u.byteOffset,u.byteLength);let p=0;
+  const need=n=>{if(p+n>u.length)throw new Error('bad loc')};
+  const i32=()=>{need(4);const v=dv.getInt32(p);p+=4;return v};
+  const i8=()=>{need(1);return u[p++]};
+  const s=()=>{need(2);const n=dv.getUint16(p);p+=2;need(n);const t=td.decode(u.subarray(p,p+n));p+=n;return t};
+  const type=i32(),lc=i32();
+  if(type!==2||lc<0||lc>64)throw new Error('unsupported loc');
+  const uniq=i8(),kc=i32();
+  if(kc<0||kc>20000)throw new Error('bad loc');
+  const keys=[];
+  for(let i=0;i<kc;i++)keys.push(uniq?(i32()>>>0).toString(16).toUpperCase().padStart(8,'0'):s());
+  const langs=[];
+  for(let i=0;i<lc;i++){const tn=s();i32();langs.push({tn,a:0,b:0,bid:'',vals:[]})}
+  for(const l of langs){
+    l.a=i32();l.b=i8();l.bid=s();
+    const c=i32();if(c!==kc)throw new Error('bad loc');
+    for(let i=0;i<c;i++)l.vals.push(s());
+  }
+  return {uniq,keys,langs};
+}
+function locWrite(L){
+  const parts=[];
+  const b32=v=>{const b=new Uint8Array(4);new DataView(b.buffer).setInt32(0,v);parts.push(b)};
+  const s=t=>{const e=te.encode(t),b=new Uint8Array(2);new DataView(b.buffer).setUint16(0,e.length);parts.push(b,e)};
+  b32(2);b32(L.langs.length);parts.push(Uint8Array.of(L.uniq?1:0));b32(L.keys.length);
+  L.keys.forEach(k=>L.uniq?b32(parseInt(k,16)|0):s(k));
+  const blocks=L.langs.map(l=>{
+    const out=[];
+    const o32=v=>{const b=new Uint8Array(4);new DataView(b.buffer).setInt32(0,v);out.push(b)};
+    const os=t=>{const e=te.encode(t),b=new Uint8Array(2);new DataView(b.buffer).setUint16(0,e.length);out.push(b,e)};
+    o32(l.a);out.push(Uint8Array.of(l.b));os(l.bid);o32(l.vals.length);l.vals.forEach(os);
+    return cat(out);
+  });
+  L.langs.forEach((l,i)=>{s(l.tn);b32(blocks[i].length)});
+  blocks.forEach(b=>parts.push(b));
+  return cat(parts);
+}
+
+/* ----- converting to a console ----- */
+// skin packs: folders are removed, skins and capes inside them are moved to the top so no skin is lost.
+// texture / mash-up packs (they contain texture pack info or game rules) keep their folders, only the byte order changes
+function convert(m,c,rep,label){
+  label=label||'';
+  const strip=!c.keepFolders&&!m.files.some(f=>f.type===T.TPINFO||f.type===T.GRF);
+  const out={type:m.type,names:m.names.map(n=>n.slice()),xml:m.xml,le:c.le,files:[]};
+  const used=new Set(m.files.filter(f=>!/[\\/]/.test(f.name)).map(f=>f.name.toLowerCase()));
+  const dropped={},renamed={};
+  for(const f of m.files){
+    const nf={name:f.name,type:f.type,props:f.props.map(p=>p.slice()),data:f.data};
+    if(strip&&/[\\/]/.test(f.name)){
+      if(f.type===T.SKIN||f.type===T.CAPE){
+        const b=base(f.name);let n=b,i=2;
+        while(used.has(n.toLowerCase())){n=b.replace(/(\.[^.]*)?$/,'_'+i+'$1');i++}
+        used.add(n.toLowerCase());nf.name=n;renamed[b.toLowerCase()]=n;
+        rep.moved.push(label+f.name+' -> '+n);
+      }else{
+        const d=f.name.split(/[\\/]/).slice(0,-1).join('/');dropped[d]=(dropped[d]||0)+1;continue;
+      }
+    }
+    if((nf.type===T.SKINDATA||nf.type===T.TPINFO)&&nf.data.length){
+      try{
+        const sub=pckParse(nf.data);if(!sub)throw new Error('x');
+        nf.data=pckWrite(convert(sub,c,rep,nf.name+': '),c.le);
+      }catch(e){rep.warn.push(label+nf.name+' is a pck inside the pack and could not be converted, it was copied as is')}
+    }else if(nf.type===T.AUDIO&&m.le!==c.le){
+      rep.warn.push(label+nf.name+' is an audio file, it was copied as is (its byte order is not converted)');
+    }
+    out.files.push(nf);
+  }
+  if(strip)out.files.forEach(f=>f.props.forEach(p=>{
+    if(p[0]==='CAPEPATH'){const b=base(p[1]);p[1]=renamed[b.toLowerCase()]||b}
+  }));
+  Object.keys(dropped).forEach(d=>rep.removed.push(label+d+'/ ('+countText(dropped[d],'file')+')'));
+  return out;
+}
+
+/* ----- zip (no compression) for "export for every console" ----- */
+function zip(entries){
+  const T32=new Uint32Array(256);
+  for(let n=0;n<256;n++){let c=n;for(let k=0;k<8;k++)c=c&1?0xEDB88320^(c>>>1):c>>>1;T32[n]=c>>>0}
+  const crc=d=>{let c=0xFFFFFFFF;for(let i=0;i<d.length;i++)c=T32[(c^d[i])&255]^(c>>>8);return(c^0xFFFFFFFF)>>>0};
+  const l32=v=>{const b=new Uint8Array(4);new DataView(b.buffer).setUint32(0,v>>>0,true);return b};
+  const l16=v=>{const b=new Uint8Array(2);new DataView(b.buffer).setUint16(0,v,true);return b};
+  const parts=[],cen=[];let off=0;
+  entries.forEach(e=>{
+    const nm=te.encode(e.name),c=crc(e.data),n=e.data.length;
+    const local=cat([l32(0x04034b50),l16(20),l16(0x0800),l16(0),l16(0),l16(0x21),l32(c),l32(n),l32(n),l16(nm.length),l16(0),nm]);
+    parts.push(local,e.data);
+    cen.push(cat([l32(0x02014b50),l16(20),l16(20),l16(0x0800),l16(0),l16(0),l16(0x21),l32(c),l32(n),l32(n),l16(nm.length),l16(0),l16(0),l16(0),l16(0),l32(0),l32(off),nm]));
+    off+=local.length+n;
+  });
+  const cd=cat(cen);
+  return cat([...parts,cd,cat([l32(0x06054b50),l16(0),l16(0),l16(entries.length),l16(entries.length),l32(cd.length),l32(off),l16(0)])]);
+}
+
+/* ----- the page ----- */
+const st={m:null,loc:null,locFile:null,locOk:false,fresh:false,name:'',fname:'',urls:[],msg:null,reps:null,consoleId:'xbox360',newName:''};
+const get=(f,k)=>{const p=f.props.find(x=>x[0]===k);return p?p[1]:null};
+const set=(f,k,v)=>{const p=f.props.find(x=>x[0]===k);if(p)p[1]=String(v);else f.props.push([k,String(v)])};
+const del=(f,k)=>{f.props=f.props.filter(x=>x[0]!==k)};
+const skinId=f=>{const m=/dlcskin(\d+)/i.exec(f.name);return m?m[1]:null};
+const skins=()=>st.m.files.filter(f=>f.type===T.SKIN);
+const capeOf=f=>{const p=get(f,'CAPEPATH');if(!p)return null;const b=base(p).toLowerCase();return st.m.files.find(x=>x.type===T.CAPE&&base(x.name).toLowerCase()===b)||null};
+const pngInfo=u=>{
+  const sig=[137,80,78,71,13,10,26,10];
+  if(u.length<24||sig.some((v,i)=>u[i]!==v))return null;
+  const d=new DataView(u.buffer,u.byteOffset);return{w:d.getUint32(16),h:d.getUint32(20)};
+};
+const hex8=n=>'0x'+(n>>>0).toString(16).padStart(8,'0');
+const slug=()=>st.name.replace(/[^A-Za-z0-9_-]+/g,'_').replace(/^_+|_+$/g,'').slice(0,40)||'skinpack';
+function download(name,bytes,type){
+  const a=el('a',{href:URL.createObjectURL(new Blob([bytes],{type:type||'application/octet-stream'})),download:name});
+  document.body.append(a);a.click();setTimeout(()=>{URL.revokeObjectURL(a.href);a.remove()},1000);
+}
+
+// localisation helpers, they do nothing unless the pack's loc file was checked
+const locSync=()=>{if(st.locFile)st.locFile.data=locWrite(st.loc)};
+const locGet=k=>{if(!st.locOk||!st.loc.langs[0])return null;const i=st.loc.keys.indexOf(k);return i<0?null:st.loc.langs[0].vals[i]};
+const locSet=(k,v)=>{
+  if(!st.locOk)return;
+  const i=st.loc.keys.indexOf(k);
+  if(i<0){st.loc.keys.push(k);st.loc.langs.forEach(l=>l.vals.push(v))}else st.loc.langs.forEach(l=>{l.vals[i]=v});
+  locSync();
+};
+const locDel=k=>{
+  if(!st.locOk)return;
+  const i=st.loc.keys.indexOf(k);if(i<0)return;
+  st.loc.keys.splice(i,1);st.loc.langs.forEach(l=>l.vals.splice(i,1));locSync();
+};
+// name / theme of a skin: the property plus its loc key
+function setText(f,prop,idProp,suffix,val){
+  if(!val){const k=get(f,idProp);del(f,prop);del(f,idProp);if(k)locDel(k);return}
+  set(f,prop,val);
+  let k=get(f,idProp);
+  if(!k&&st.locOk&&skinId(f)){k='IDS_dlcskin'+skinId(f)+'_'+suffix;set(f,idProp,k)}
+  if(k)locSet(k,val);
+}
+
+function newPack(name){
+  const id=8000+Math.floor(Math.random()*(0xffffff-8000));
+  const loc={uniq:0,keys:['IDS_DISPLAY_NAME'],langs:[{tn:'en-EN',a:0,b:0,bid:'en-EN',vals:[name]}]};
+  const locFile={name:'localisation.loc',type:T.LOC,props:[],data:locWrite(loc)};
+  st.m={le:false,type:3,names:[],xml:null,files:[{name:'0',type:T.INFO,props:[['PACKID',String(id)],['PACKVERSION','0']],data:new Uint8Array(0)},locFile]};
+  st.loc=loc;st.locFile=locFile;st.locOk=true;st.fresh=true;st.name=name;st.fname='';st.reps=null;
+}
+function loadPack(u8,fname){
+  const m=pckParse(u8);
+  if(!m)return false;
+  st.m=m;st.fresh=false;st.fname=fname;st.reps=null;st.loc=null;st.locOk=false;
+  st.locFile=m.files.find(f=>f.type===T.LOC)||null;
+  if(st.locFile){try{const L=locParse(st.locFile.data);if(same(locWrite(L),st.locFile.data)){st.loc=L;st.locOk=true}}catch(e){}}
+  st.name=locGet('IDS_DISPLAY_NAME')||fname.replace(/\.pck$/i,'')||'skinpack';
+  return true;
+}
+async function readSkinFile(file,kind){
+  const u=new Uint8Array(await file.arrayBuffer());
+  const d=pngInfo(u);
+  if(!d)throw new Error(file.name+' is not a PNG.');
+  if(kind==='cape'?!(d.w===64&&d.h===32):!(d.w===64&&(d.h===32||d.h===64)))
+    throw new Error(file.name+' is '+d.w+'x'+d.h+'. '+(kind==='cape'?'Capes must be 64x32.':'Skins must be 64x32 or 64x64.'));
+  return{u,d};
+}
+function makeSkin(name,u,d){
+  let id;do{id=String(10000000+Math.floor(Math.random()*89999999))}while(skins().some(s=>skinId(s)===id));
+  const f={name:'dlcskin'+id+'.png',type:T.SKIN,props:[],data:u};
+  set(f,'DISPLAYNAME',name);
+  if(st.locOk){const k='IDS_dlcskin'+id+'_DISPLAYNAME';set(f,'DISPLAYNAMEID',k);locSet(k,name)}
+  set(f,'ANIM',hex8(d.h===64?0x40000:0));set(f,'GAME_FLAGS','0x18');set(f,'FREE','1');
+  return f;
+}
+function removeSkin(f){
+  const c=capeOf(f);
+  if(c&&!skins().some(s=>s!==f&&capeOf(s)===c))st.m.files=st.m.files.filter(x=>x!==c);
+  ['DISPLAYNAMEID','THEMENAMEID'].forEach(p=>{const k=get(f,p);if(k)locDel(k)});
+  st.m.files=st.m.files.filter(x=>x!==f);
+}
+function moveSkin(f,dir){
+  const all=skins(),i=all.indexOf(f),o=all[i+dir];if(!o)return;
+  const a=st.m.files.indexOf(f),b=st.m.files.indexOf(o);
+  st.m.files[a]=o;st.m.files[b]=f;
+}
+function buildFor(c){
+  const rep={moved:[],removed:[],warn:[],c};
+  const out=convert(st.m,c,rep);
+  rep.bytes=pckWrite(out,c.le);
+  return rep;
+}
+
+function draw(){
+  const root=$('packmaker');
+  st.urls.forEach(u=>URL.revokeObjectURL(u));st.urls=[];
+  root.textContent='';document.title='Pack Maker | Skin Central';
+  const say=(cls,t)=>el('p',{class:'msg '+cls,text:t});
+  const btn=(t,fn,extra)=>{const b=el('button',{class:'btn',type:'button',text:t});if(extra)b.className+=' '+extra;b.addEventListener('click',fn);return b};
+  root.append(el('h2',{text:'Pack Maker'}),
+    el('p',{class:'hint',text:'Make a skin pack, edit one, or convert one to a different console. It all happens in your browser, nothing is uploaded. This makes the .pck file only. Getting it onto the console is in the tutorials.'}));
+
+  // start: open / new
+  const fileIn=el('input',{type:'file',accept:'.pck'});fileIn.hidden=true;
+  const openFile=async f=>{
+    if(f.size>60*1024*1024){st.msg=['err','That file is over 60 MB.'];return draw()}
+    const ok=loadPack(new Uint8Array(await f.arrayBuffer()),f.name);
+    st.msg=ok?['ok','Opened '+f.name+'.']:['err',f.name+' does not look like a .pck file.'];draw();
+  };
+  fileIn.addEventListener('change',()=>{if(fileIn.files[0])openFile(fileIn.files[0])});
+  const nn=el('input',{type:'text',maxlength:'40',placeholder:'Name for a new pack','aria-label':'Name for a new pack'});nn.value=st.newName;
+  nn.addEventListener('input',()=>{st.newName=nn.value});
+  const drop=el('div',{class:'pmdrop',text:'Drop a .pck file here to open it'});
+  ['dragenter','dragover'].forEach(ev=>drop.addEventListener(ev,e=>{e.preventDefault();drop.classList.add('over')}));
+  ['dragleave','drop'].forEach(ev=>drop.addEventListener(ev,e=>{e.preventDefault();drop.classList.remove('over')}));
+  drop.addEventListener('drop',e=>{if(e.dataTransfer.files[0])openFile(e.dataTransfer.files[0])});
+  root.append(drop,fileIn,
+    el('div',{class:'dl'},btn('Open a .pck',()=>fileIn.click())),
+    el('label',{text:'Or start a new skin pack'}),nn,
+    el('div',{class:'dl pmgap'},btn('New skin pack',()=>{
+      const name=nn.value.trim().slice(0,40);
+      if(!name){st.msg=['err','Type a name for the new pack first.'];return draw()}
+      newPack(name);st.msg=['ok','Started a new pack. Add some skins below.'];draw();
+    })));
+  if(st.msg)root.append(say(st.msg[0],st.msg[1]));
+  if(!st.m)return;
+
+  // pack settings
+  root.append(el('h3',{text:'Pack'}));
+  const nameIn=el('input',{type:'text',maxlength:'40','aria-label':'Pack name'});nameIn.value=st.name;
+  nameIn.addEventListener('change',()=>{st.name=nameIn.value.trim().slice(0,40)||'skinpack';locSet('IDS_DISPLAY_NAME',st.name);nameIn.value=st.name});
+  root.append(el('label',{text:'Pack name'}),nameIn);
+  const info=st.m.files.find(f=>f.type===T.INFO&&f.name==='0');
+  if(info){
+    const mk=(label,prop,max)=>{
+      const i=el('input',{type:'text',inputmode:'numeric','aria-label':label});i.value=get(info,prop)||'0';
+      i.addEventListener('change',()=>{const n=parseInt(i.value,10);if(isFinite(n)&&n>=0&&n<=max)set(info,prop,n);else i.value=get(info,prop)||'0'});
+      root.append(el('label',{text:label}),i);
+    };
+    mk('Pack ID (a number up to 16777215, every pack should have its own)','PACKID',0xffffff);
+    mk('Pack version','PACKVERSION',999999);
+  }
+  if(st.m.files.some(f=>f.type===T.TPINFO||f.type===T.GRF))
+    root.append(el('p',{class:'callout',text:'This looks like a texture or mash-up pack. You can still convert it, but its folders are kept because they are part of the pack.'}));
+  if(st.fresh)root.append(el('p',{class:'hint',text:'New packs get a basic localisation file (pack name and skin names). It is written from the format notes and has not been tested on a console yet.'}));
+  else if(!st.locFile)root.append(el('p',{class:'hint',text:'This pack has no localisation file, so names are stored on the skins only.'}));
+  else if(!st.locOk)root.append(el('p',{class:'hint',text:'This pack\u2019s localisation file is not one I can edit safely, so I leave it alone. Names you change are saved on the skins, but the game may keep showing the old ones.'}));
+
+  // skins
+  const list=skins();
+  root.append(el('h3',{text:'Skins ('+list.length+')'}));
+  const addIn=el('input',{type:'file',accept:'image/png',multiple:'multiple'});addIn.hidden=true;
+  addIn.addEventListener('change',async()=>{
+    const errs=[];let n=0;
+    for(const file of Array.from(addIn.files)){
+      if(skins().length>=200){errs.push('A pack can hold 200 skins here.');break}
+      try{
+        const {u,d}=await readSkinFile(file,'skin');
+        st.m.files.push(makeSkin(file.name.replace(/\.png$/i,'').replace(/[_-]+/g,' ').trim().slice(0,40)||'Skin',u,d));n++;
+      }catch(e){errs.push(e.message)}
+    }
+    st.msg=errs.length?['err',(n?'Added '+countText(n,'skin')+'. ':'')+errs.join(' ')]:['ok','Added '+countText(n,'skin')+'.'];draw();
+  });
+  root.append(addIn,el('div',{class:'dl'},btn('Add skins (PNG)',()=>addIn.click())));
+  const grid=el('div',{class:'pmskins'});
+  list.forEach((f,i)=>grid.append(skinCard(f,i,list.length)));
+  root.append(grid);
+  if(!list.length)root.append(el('p',{class:'hint',text:'No skins yet. Skins are 64x32 or 64x64 PNG files.'}));
+
+  // other files
+  const other=st.m.files.filter(f=>f.type!==T.SKIN&&f.type!==T.CAPE);
+  if(other.length){
+    const names=other.slice(0,12).map(f=>f.name).join(', ')+(other.length>12?' and '+(other.length-12)+' more':'');
+    root.append(el('h3',{text:'Other files in the pack'}),el('p',{class:'hint',text:names+'. These are kept as they are (converted along with the rest when exporting).'}));
+  }
+
+  // export
+  root.append(el('h3',{text:'Export for a console'}));
+  const sel=el('select',{'aria-label':'Console'});
+  CONSOLES.forEach(c=>{const o=el('option',{value:c.id,text:c.name});if(c.id===st.consoleId)o.selected=true;sel.append(o)});
+  sel.addEventListener('change',()=>{st.consoleId=sel.value});
+  root.append(sel,el('p',{class:'hint pmgap',text:'Exporting sets the right byte order for the console. In skin packs, folders that some consoles cannot read are removed and every skin and cape inside them is moved to the top, so no skins are lost.'}));
+  const run=fn=>{
+    if(!skins().length&&!st.m.files.some(f=>f.type===T.SKINDATA)){st.msg=['err','Add at least one skin first.'];return draw()}
+    try{fn()}catch(e){st.msg=['err','Could not export: '+e.message]}draw();
+  };
+  root.append(el('div',{class:'dl'},
+    btn('Export .pck',()=>run(()=>{
+      const c=CONSOLES.find(x=>x.id===sel.value),r=buildFor(c);
+      download(slug()+'_'+c.id+'.pck',r.bytes);st.reps=[r];st.msg=['ok','Exported for '+c.name+'.'];
+    })),
+    btn('Export for every console (.zip)',()=>run(()=>{
+      const rs=CONSOLES.map(buildFor);
+      download(slug()+'_all_consoles.zip',zip(rs.map(r=>({name:slug()+'_'+r.c.id+'.pck',data:r.bytes}))),'application/zip');
+      st.reps=rs;st.msg=['ok','Exported '+rs.length+' files in one zip.'];
+    }))));
+  if(st.reps){
+    const box=el('div',{class:'inset pmrep'});
+    st.reps.forEach(r=>{
+      const lines=[];
+      if(r.removed.length)lines.push('Removed folders: '+r.removed.join(', '));
+      if(r.moved.length)lines.push('Moved to the top: '+countText(r.moved.length,'skin or cape')+(r.moved.length<=8?' ('+r.moved.join('; ')+')':''));
+      r.warn.forEach(w=>lines.push('Note: '+w));
+      if(!lines.length)lines.push('No changes needed besides the byte order.');
+      box.append(el('p',{text:r.c.name+': '+lines.join(' | ')}));
+    });
+    root.append(box);
+  }
+}
+
+function skinCard(f,i,count){
+  const url=URL.createObjectURL(new Blob([f.data],{type:'image/png'}));st.urls.push(url);
+  const nm=el('input',{type:'text',maxlength:'40','aria-label':'Skin name'});nm.value=get(f,'DISPLAYNAME')||'';
+  nm.addEventListener('change',()=>{const v=nm.value.trim().slice(0,40)||'Skin';nm.value=v;setText(f,'DISPLAYNAME','DISPLAYNAMEID','DISPLAYNAME',v)});
+  const th=el('input',{type:'text',maxlength:'40','aria-label':'Theme name',placeholder:'Theme (optional)'});th.value=get(f,'THEMENAME')||'';
+  th.addEventListener('change',()=>{const v=th.value.trim().slice(0,40);th.value=v;setText(f,'THEMENAME','THEMENAMEID','THEMENAME',v)});
+  const a=parseInt(get(f,'ANIM')||'0')>>>0;
+  const ms=el('select',{'aria-label':'Model'});
+  [['classic','Classic arms (64x32)'],['wide','Wide arms (64x64)'],['slim','Slim arms (64x64)']].forEach(o=>ms.append(el('option',{value:o[0],text:o[1]})));
+  ms.value=a&0x80000?'slim':a&0x40000?'wide':'classic';
+  ms.addEventListener('change',()=>{
+    let v=(parseInt(get(f,'ANIM')||'0')>>>0)&~(0x40000|0x80000);
+    if(ms.value==='wide')v|=0x40000;if(ms.value==='slim')v|=0x80000;
+    set(f,'ANIM',hex8(v));
+  });
+  const btn=(t,fn)=>{const b=el('button',{class:'btn',type:'button',text:t});b.addEventListener('click',fn);return b};
+  const pick=(accept,fn)=>{const inp=el('input',{type:'file',accept});inp.hidden=true;inp.addEventListener('change',async()=>{if(inp.files[0])try{await fn(inp.files[0])}catch(e){st.msg=['err',e.message]}draw()});document.body.append(inp);inp.click();setTimeout(()=>inp.remove(),60000)};
+  const cape=capeOf(f);
+  const row=el('div',{class:'dl'});
+  row.append(btn('Up',()=>{moveSkin(f,-1);draw()}),btn('Down',()=>{moveSkin(f,1);draw()}),
+    btn('New PNG',()=>pick('image/png',async file=>{const {u}=await readSkinFile(file,'skin');f.data=u})),
+    cape?btn('Remove cape',()=>{st.m.files=st.m.files.filter(x=>x!==cape);del(f,'CAPEPATH');draw()})
+        :btn('Add cape',()=>pick('image/png',async file=>{
+          const {u}=await readSkinFile(file,'cape');
+          const id=skinId(f)||String(Math.floor(Math.random()*99999999)).padStart(8,'0');
+          const cn='dlccape'+id+'.png';
+          st.m.files.push({name:cn,type:T.CAPE,props:[],data:u});set(f,'CAPEPATH',cn);
+        })),
+    btn('Remove',()=>{removeSkin(f);draw()}));
+  return el('div',{class:'card skin'},
+    el('img',{src:url,alt:'',width:'128'}),
+    el('div',{class:'f'},el('label',{text:'Name'}),nm,th,ms,
+      el('p',{class:'hint pmgap',text:'Skin '+(i+1)+' of '+count+(cape?', has a cape':'')}),row));
+}
+
+return {show:draw,pckParse,pckWrite,locParse,locWrite,convert,zip,CONSOLES};
+})();
+function showPackMaker(){PM.show()}
 
 /* ---------- announcements (the bell button top left) ----------
    the text + banner image live in the database, the owner panel (#/owner) edits them.
@@ -2103,9 +2538,9 @@ function route(){
   const m=h.match(/^#\/pack\/(.+)$/);
   const p=m&&packs.find(x=>x.slug===decodeURIComponent(m[1]));
   const us=h.match(/^#\/user\/([A-Za-z0-9_]{3,20})$/);
-  const up=h==='#/upload',ad=h==='#/admin',ru=h==='#/rules',tu=h==='#/tutorials',ac=h==='#/account',ow=h==='#/owner';
-  $('skins').hidden=!!p||up||ad||ru||tu||ac||ow||!!us;$('profile').hidden=!us;$('detail').hidden=!p;$('upload').hidden=!up;$('admin').hidden=!ad;$('rules').hidden=!ru;$('tutorials').hidden=!tu;$('account').hidden=!ac;$('owner').hidden=!ow;
-  ad?showAdmin():up?showUpload():ru?showRules():tu?showTutorials():ac?showAccount():ow?showOwner():us?showProfile(us[1]):p?showPack(p):renderList($('q').value);
+  const up=h==='#/upload',ad=h==='#/admin',ru=h==='#/rules',tu=h==='#/tutorials',pk=h==='#/packmaker',ac=h==='#/account',ow=h==='#/owner';
+  $('skins').hidden=!!p||up||ad||ru||tu||pk||ac||ow||!!us;$('profile').hidden=!us;$('detail').hidden=!p;$('upload').hidden=!up;$('admin').hidden=!ad;$('rules').hidden=!ru;$('tutorials').hidden=!tu;$('packmaker').hidden=!pk;$('account').hidden=!ac;$('owner').hidden=!ow;
+  ad?showAdmin():up?showUpload():ru?showRules():tu?showTutorials():pk?showPackMaker():ac?showAccount():ow?showOwner():us?showProfile(us[1]):p?showPack(p):renderList($('q').value);
   window.scrollTo(0,0);
 }
 $('q').addEventListener('input',e=>renderList(e.target.value));
