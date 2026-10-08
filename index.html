@@ -571,7 +571,13 @@ function parseBoxes(list){
   return out;
 }
 function pckSkins(files){
-  return files.filter(f=>f.type===0&&/\.png$/i.test(f.name)).slice(0,100).map(f=>{
+  // a whole skin pack keeps its skins in a Skins.pck inside it, so look in there too. folders do not matter, only the file type
+  let all=files;
+  for(const f of files){
+    if(f.type!==11)continue;
+    try{const sub=readPck(f.data.buffer.slice(f.data.byteOffset,f.data.byteOffset+f.data.byteLength));if(sub)all=all.concat(sub)}catch(e){}
+  }
+  return all.filter(f=>f.type===0&&/\.png$/i.test(f.name)).slice(0,100).map(f=>{
     const anim=parseInt(f.props.ANIM||'0')||0;
     return {name:(f.props.DISPLAYNAME||'Skin').slice(0,40),theme:(f.props.THEMENAME||'').slice(0,40),slim:!!(anim&SLIM_FLAG),anim,boxes:parseBoxes(f.multi&&f.multi.BOX),png:f.data};
   });
@@ -1483,36 +1489,49 @@ function locWrite(L){
 }
 
 /* ----- folders ----- */
-// pck studio can leave skins in folders ("Skins/", "Skins/Skins/", ...) and the console does not like that.
-// every skin and cape is moved to the top of its pck, other files in folders are dropped, folder entries are dropped.
-// handles / and \\, leading ./ or /, any depth, any capital letters, and a Skins.pck inside a folder or inside another pck.
-// a loc / info / Skins.pck found in a folder is moved up when the top has none. texture and mash-up packs are left alone
+// skins and capes never belong in a folder, pck studio can leave them in "Skins/", "Skins/Skins/" and the console does not like that,
+// so every skin and cape is moved to the top of its pck (handles / and \, a leading ./ or /, any depth, any capitals, and a pck inside a pck).
+// nothing else is ever deleted: a folder is only removed once it is empty. folders the game needs are not touched at all:
+// res/ (where the game looks for textures, from the pck studio source) and the folder a texture pack's Info.pck sits in.
+// a loc / info / Skins.pck found in a folder is moved up when the top has none.
 const norm=n=>n.replace(/\\/g,'/').replace(/^(\.?\/+)+/,'');
 function flatten(m,rep,label){
   label=label||'';
-  if(m.files.some(f=>f.type===T.TPINFO||f.type===T.GRF))return false;
+  rep.kept=rep.kept||[];
   let changed=false;
-  const used=new Set(),dropped={},renamed={},keep=[],dirs=new Set();
+  const firstDir=n=>norm(n).split('/')[0].toLowerCase();
+  const must=new Set(['res']);
+  m.files.forEach(f=>{if(f.type===T.TPINFO&&norm(f.name).includes('/'))must.add(firstDir(f.name))});
+  const used=new Set(),renamed={},keep=[],touched=new Set(),stay=new Set();
   m.files.forEach(f=>{const n=norm(f.name);if(n&&!n.includes('/')){used.add(n.toLowerCase());if(n!==f.name){f.name=n;changed=true}}});
+  const ancestors=d=>{const o=[],p=d.split('/').filter(Boolean);for(let i=1;i<=p.length;i++)o.push(p.slice(0,i).join('/')+'/');return o};
   for(const f of m.files){
     const n=norm(f.name);
     if(n&&!n.includes('/')){keep.push(f);continue}
+    if(must.has(firstDir(f.name))){if(n!==f.name){f.name=n;changed=true}keep.push(f);stay.add(firstDir(f.name)+'/');continue}
     changed=true;
     const parts=n.split('/').filter(Boolean),b=/\/$/.test(n)?'':(parts.pop()||''),dir=parts.join('/');
-    if(dir)dirs.add(dir+'/');
-    if(!b){continue}
-    let ok=false,name=b;
+    ancestors(dir).forEach(d=>touched.add(d));
+    if(!b)continue;                                   // a folder entry on its own, nothing in it
+    let name=b,move=false;
     if(f.type===T.SKIN||f.type===T.CAPE){
       let i=2;while(used.has(name.toLowerCase())){name=b.replace(/(\.[^.]*)?$/,'_'+i+'$1');i++}
-      ok=true;
-    }else if((f.type===T.SKINDATA||f.type===T.INFO||f.type===T.LOC)&&!used.has(b.toLowerCase())){ok=true}
-    if(!ok){dropped[dir]=(dropped[dir]||0)+1;continue}
-    used.add(name.toLowerCase());renamed[b.toLowerCase()]=name;
-    if(f.type===T.SKIN||f.type===T.CAPE)rep.moved.push(label+f.name+' -> '+name);
-    f.name=name;keep.push(f);
+      move=true;
+    }else if((f.type===T.SKINDATA||f.type===T.INFO||f.type===T.LOC)&&!used.has(b.toLowerCase()))move=true;
+    if(move){
+      used.add(name.toLowerCase());renamed[b.toLowerCase()]=name;
+      if(f.type===T.SKIN||f.type===T.CAPE)rep.moved.push(label+f.name+' -> '+name);
+      f.name=name;
+    }else{f.name=n;ancestors(dir).forEach(d=>stay.add(d))}   // not a skin: stays where it is, with its folder
+    keep.push(f);
   }
   m.files=keep;
-  keep.forEach(f=>f.props.forEach(p=>{if(p[0]==='CAPEPATH'){const b=base(norm(p[1]));p[1]=renamed[b.toLowerCase()]||b}}));
+  const rootNames=new Set(keep.map(f=>f.name.toLowerCase()));
+  keep.forEach(f=>f.props.forEach(p=>{
+    if(p[0]!=='CAPEPATH')return;
+    const b=base(norm(p[1])).toLowerCase();
+    if(renamed[b])p[1]=renamed[b];else if(norm(p[1]).includes('/')&&rootNames.has(b))p[1]=base(norm(p[1]));
+  }));
   // a pck inside this pck gets the same treatment
   for(const f of keep){
     if(f.type===T.SKINDATA&&f.data.length){
@@ -1522,14 +1541,54 @@ function flatten(m,rep,label){
       }catch(e){rep.warn.push(label+f.name+' could not be opened to check it for folders')}
     }
   }
-  dirs.forEach(d=>rep.folders.push(label+d));
-  Object.keys(dropped).forEach(d=>rep.removed.push(label+(d?d+'/':'')+' ('+countText(dropped[d],'other file')+' not kept)'));
+  touched.forEach(d=>{if(!stay.has(d))rep.folders.push(label+d)});
+  stay.forEach(d=>rep.kept.push(label+d));
   return changed;
 }
 
-/* ----- converting to a console ----- */
+/* ----- audio pck (music): same idea as a pck, read with one byte order and written with the other (pck studio does this too) ----- */
+function audioRecode(u,toLe){
+  for(const from of [false,true]){
+    try{
+      const dv=new DataView(u.buffer,u.byteOffset,u.byteLength);let p=0;
+      const need=n=>{if(p+n>u.length)throw new Error('bad')};
+      const i32=()=>{need(4);const v=dv.getUint32(p,from);p+=4;return v};
+      const str=()=>{const n=i32();if(n>5000)throw new Error('bad');need(n*2);let t='';for(let i=0;i<n;i++){t+=String.fromCharCode(dv.getUint16(p,from));p+=2}i32();return t};
+      const A={},rd=(z,n)=>{if(n>100000)throw new Error('bad');return n};
+      A.type=i32();if(A.type>1)throw new Error('bad');
+      A.lut=[];for(let n=rd(0,i32()),i=0;i<n;i++)A.lut.push([i32(),str()]);
+      A.cats=[];for(let n=rd(0,i32()),i=0;i<n;i++)A.cats.push({a:i32(),b:i32(),name:str(),items:[]});
+      A.cats.forEach(c=>{for(let n=rd(0,i32()),i=0;i<n;i++)c.items.push([i32(),str()])});
+      const tail=u.slice(p);
+      const parts=[];
+      const w32=v=>{const b=new Uint8Array(4);new DataView(b.buffer).setUint32(0,v>>>0,toLe);parts.push(b)};
+      const ws=t=>{w32(t.length);const b=new Uint8Array(t.length*2),d=new DataView(b.buffer);for(let i=0;i<t.length;i++)d.setUint16(i*2,t.charCodeAt(i),toLe);parts.push(b);w32(0)};
+      w32(A.type);w32(A.lut.length);A.lut.forEach(e=>{w32(e[0]);ws(e[1])});
+      w32(A.cats.length);A.cats.forEach(c=>{w32(c.a);w32(c.b);ws(c.name)});
+      A.cats.forEach(c=>{w32(c.items.length);c.items.forEach(e=>{w32(e[0]);ws(e[1])})});
+      parts.push(tail);
+      return cat(parts);
+    }catch(e){}
+  }
+  throw new Error('not an audio pck');
+}
+
+/* ----- checks pck studio makes before it saves (PreSave in PckEditor.cs): these crash the game ----- */
+function checkPack(m){
+  const sd=m.files.filter(f=>f.type===T.SKINDATA);
+  if(sd.length>1)throw new Error('The pack has '+sd.length+' Skins.pck files. The game only reads the first one, remove the others.');
+  sd.forEach(f=>{
+    const sub=f.data.length?pckParse(f.data):null;
+    if(!sub)throw new Error(f.name+' is not a valid pck and can crash the game.');
+    if(m.xml&&sub.xml!==m.xml)throw new Error(f.name+' has BOX version '+(sub.xml||0)+' but the pack has '+m.xml+', that can crash the game.');
+    if(!sub.files.some(x=>x.type===T.SKIN))throw new Error(f.name+' has no skins in it, that can crash the game. Add a skin or remove it.');
+  });
+}
+
+/* ----- converting to a console (what pck studio does: set the byte order of the pck and of every pck inside it) ----- */
 function convert(m,c,rep,label){
   label=label||'';
+  rep.kept=rep.kept||[];
   const work={type:m.type,names:m.names.map(n=>n.slice()),xml:m.xml,le:c.le,files:m.files.map(f=>({name:f.name,type:f.type,props:f.props.map(p=>p.slice()),data:f.data}))};
   if(!c.keepFolders)flatten(work,rep,label);
   work.names=m.xml==null?CANON.map((k,i)=>[i,k]):m.names.map(n=>n.slice());
@@ -1539,8 +1598,10 @@ function convert(m,c,rep,label){
         const sub=pckParse(nf.data);if(!sub)throw new Error('x');
         nf.data=pckWrite(convert(sub,c,rep,label+nf.name+': '),c.le);
       }catch(e){rep.warn.push(label+nf.name+' is a pck inside the pack and could not be converted, it was copied as is')}
-    }else if(nf.type===T.AUDIO&&m.le!==c.le){
-      rep.warn.push(label+nf.name+' is an audio file, it was copied as is (its byte order is not converted)');
+    }else if(nf.type===T.AUDIO&&nf.data.length){
+      try{nf.data=audioRecode(nf.data,c.le)}catch(e){rep.warn.push(label+nf.name+' could not be converted to the new byte order, it was copied as is')}
+    }else if(nf.type===T.GRF){
+      rep.warn.push(label+nf.name+' (game rules) was copied as is, its compression depends on the console (PS3 Deflate, Xbox 360 XMem, others Zlib) and is not converted here');
     }
   }
   return work;
@@ -1582,8 +1643,11 @@ const pngInfo=u=>{
 };
 const hex8=n=>'0x'+(n>>>0).toString(16).padStart(8,'0');
 function impText(){
-  const i=st.imp;if(!i||!(i.folders.length||i.removed.length||i.moved.length))return '';
-  return ' Folders were removed automatically ('+[...new Set(i.folders)].join(', ')+')'+(i.moved.length?' and '+countText(i.moved.length,'skin or cape')+' moved out of them, nothing was lost':'')+(i.removed.length?'. Other files in folders were dropped: '+i.removed.join(', '):'')+'.';
+  const i=st.imp;if(!i)return '';
+  let t='';
+  if(i.folders.length)t+=' Folders removed: '+[...new Set(i.folders)].join(', ')+(i.moved.length?' ('+countText(i.moved.length,'skin or cape')+' moved to the top, none lost)':'')+'.';
+  if(i.kept.length)t+=' Folders kept because they hold other files or are needed by the game: '+[...new Set(i.kept)].join(', ')+'.';
+  return t;
 }
 const slug=()=>st.name.replace(/[^A-Za-z0-9_-]+/g,'_').replace(/^_+|_+$/g,'').slice(0,40)||'skinpack';
 function download(name,bytes,type){
@@ -1627,7 +1691,7 @@ function newPack(name){
 function loadPack(u8,fname){
   const m=pckParse(u8);
   if(!m)return false;
-  const imp={moved:[],removed:[],folders:[],warn:[]};
+  const imp={moved:[],folders:[],kept:[],warn:[]};
   flatten(m,imp);
   st.imp=imp;st.sub=null;st.subFile=null;
   const sf=m.files.find(f=>f.type===T.SKINDATA&&f.data.length);
@@ -1680,8 +1744,8 @@ function moveSkin(f,dir){
 }
 function syncSub(){if(st.sub&&st.subFile)st.subFile.data=pckWrite(st.sub,st.sub.le)}
 function buildFor(c){
-  syncSub();
-  const rep={moved:[],removed:[],folders:[],warn:[],c};
+  syncSub();checkPack(st.m);
+  const rep={moved:[],folders:[],kept:[],warn:[],c};
   const out=convert(st.m,c,rep);
   rep.bytes=pckWrite(out,c.le);
   return rep;
@@ -1776,7 +1840,7 @@ function draw(){
   const sel=el('select',{'aria-label':'Console'});
   CONSOLES.forEach(c=>{const o=el('option',{value:c.id,text:c.name});if(c.id===st.consoleId)o.selected=true;sel.append(o)});
   sel.addEventListener('change',()=>{st.consoleId=sel.value});
-  root.append(sel,el('p',{class:'hint pmgap',text:'Exporting sets the right byte order for the console. In skin packs, folders that some consoles cannot read are removed and every skin and cape inside them is moved to the top, so no skins are lost.'}));
+  root.append(sel,el('p',{class:'hint pmgap',text:'Exporting sets the byte order for the console, in the pack and in every pck inside it (like PCK Studio does). Skins and capes are always moved out of folders to the top, so none are lost. Folders the game needs (res/) or that hold other files are kept.'}));
   const run=fn=>{
     if(!skins().length){st.msg=['err','Add at least one skin first.'];return draw()}
     try{fn()}catch(e){st.msg=['err','Could not export: '+e.message]}draw();
@@ -1785,6 +1849,11 @@ function draw(){
     btn('Export .pck',()=>run(()=>{
       const c=CONSOLES.find(x=>x.id===sel.value),r=buildFor(c);
       download(slug()+'_'+c.id+'.pck',r.bytes);st.reps=[r];st.msg=['ok','Exported for '+c.name+'.'];
+    })),
+    btn('Skins only (.pck, for the 3D preview)',()=>run(()=>{
+      const b=box();
+      const o={type:3,xml:b.xml,names:b.xml==null?CANON.map((k,i)=>[i,k]):b.names.map(n=>n.slice()),files:b.files.filter(f=>f.type===T.SKIN||f.type===T.CAPE)};
+      download(slug()+'_skins.pck',pckWrite(o,false));st.reps=null;st.msg=['ok','Exported the skins on their own. Use it as the skins.pck when you upload the pack.'];
     })),
     btn('Export for every console (.zip)',()=>run(()=>{
       const rs=CONSOLES.map(buildFor);
@@ -1795,7 +1864,8 @@ function draw(){
     const box=el('div',{class:'inset pmrep'});
     st.reps.forEach(r=>{
       const lines=[];
-      if(r.removed.length)lines.push('Removed folders: '+r.removed.join(', '));
+      if(r.folders.length)lines.push('Removed folders: '+[...new Set(r.folders)].join(', '));
+      if(r.kept.length)lines.push('Kept folders: '+[...new Set(r.kept)].join(', '));
       if(r.moved.length)lines.push('Moved to the top: '+countText(r.moved.length,'skin or cape')+(r.moved.length<=8?' ('+r.moved.join('; ')+')':''));
       r.warn.forEach(w=>lines.push('Note: '+w));
       if(!lines.length)lines.push('No changes needed besides the byte order.');
@@ -1845,7 +1915,7 @@ function skinCard(f,i,count){
       el('p',{class:'hint pmgap',text:'Skin '+(i+1)+' of '+count+(cape?', has a cape':'')}),row));
 }
 
-return {show:draw,pckParse,pckWrite,locParse,locWrite,convert,zip,CONSOLES,CANON,LANGS,newPack,st,loadPack,makeSkin,flatten};
+return {show:draw,pckParse,pckWrite,locParse,locWrite,convert,zip,CONSOLES,CANON,LANGS,newPack,st,loadPack,makeSkin,flatten,audioRecode,checkPack};
 })();
 function showPackMaker(){PM.show()}
 
