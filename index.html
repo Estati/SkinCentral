@@ -67,6 +67,8 @@ input[type=search]:focus{outline:3px solid var(--gold)}
 .card{background:#3a332d;border:3px solid #14110f;padding:12px;display:flex;flex-direction:column;gap:8px;align-items:center;text-align:center;min-width:0}
 .card small{font-size:var(--t);color:#bdb5ac;overflow-wrap:break-word}
 .card .btn{font-size:var(--t);padding:6px 12px;width:100%;margin-top:4px}
+   /* gallery cards: View pack button sticks to the bottom, skin and texture packs alike */
+.grid .card>.btn:last-child{margin-top:auto}
 .card .name{font-weight:700;font-size:var(--b);color:#fff;text-decoration:none;overflow-wrap:break-word}
 .empty{grid-column:1/-1;color:#bdb5ac}
 
